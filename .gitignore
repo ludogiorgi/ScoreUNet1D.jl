@@ -1,0 +1,15 @@
+# Ignore everything by default
+*
+
+# Explicitly allow the files/folders we want to commit
+!.gitignore
+!Manifest.toml
+!Project.toml
+!scripts/
+!src/
+!test/
+
+# Allow everything inside the allowed directories
+!scripts/**
+!src/**
+!test/**
