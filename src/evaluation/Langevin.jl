@@ -32,31 +32,27 @@ function run_langevin(model, dataset::NormalizedDataset, cfg::LangevinConfig)
     L = sample_length(dataset)
     C = num_channels(dataset)
     dim = L * C
+    n_ens = max(cfg.n_ensembles, 1)
     rng = MersenneTwister(cfg.seed)
     init_idx = rand(rng, 1:length(dataset))
     init_sample = Array(dataset.data[:, :, init_idx:init_idx])
-    u0 = Float64.(vec(init_sample))
+    u0 = vec(copy(init_sample))
+    u0 = Float32.(u0)
 
-    tensor_buf = Array{Float32}(undef, L, C, 1)
-    flat_tensor = reshape(tensor_buf, :)
-    score_flat = similar(flat_tensor)
-
-    drift! = function (du, u, t)
-        @inbounds @simd for i in eachindex(u)
-            flat_tensor[i] = Float32(u[i])
-        end
-        score = score_from_model(model, tensor_buf, cfg.sigma)
-        score_flat .= vec(score)
-        @inbounds @simd for i in eachindex(du)
-            du[i] = Float64(score_flat[i])
-        end
+    drift! = function (DU, U, p, t)
+        state = reshape(U, L, C, n_ens)
+        scores = score_from_model(model, state, cfg.sigma)
+        du_view = reshape(DU, L, C, n_ens)
+        copyto!(du_view, scores)
+        return nothing
     end
 
-    traj = FastSDE.evolve_ens(u0, cfg.dt, cfg.nsteps, drift!, sqrt(2.0);
-                              n_ens=cfg.n_ensembles,
+    traj = FastSDE.evolve_ens(u0, cfg.dt, cfg.nsteps, drift!, sqrt(2f0);
+                              n_ens=n_ens,
                               resolution=cfg.resolution,
                               seed=cfg.seed,
-                              timestepper=:euler)
+                              timestepper=:euler,
+                              batched_drift=true)
 
     burn_saved = min(size(traj, 2) - 1, fld(cfg.burn_in, cfg.resolution) + 1)
     post_burn = traj[:, burn_saved+1:end, :]
@@ -69,6 +65,34 @@ function run_langevin(model, dataset::NormalizedDataset, cfg::LangevinConfig)
     kl = relative_entropy(obs_pdf, sim_pdf)
 
     return LangevinResult(Float32.(post_burn), centers, sim_pdf, obs_pdf, kl)
+end
+
+function finite_minimum(values)
+    min_val = Inf
+    found = false
+    @inbounds for v in values
+        if isfinite(v)
+            found = true
+            if v < min_val
+                min_val = v
+            end
+        end
+    end
+    return found ? min_val : NaN
+end
+
+function finite_maximum(values)
+    max_val = -Inf
+    found = false
+    @inbounds for v in values
+        if isfinite(v)
+            found = true
+            if v > max_val
+                max_val = v
+            end
+        end
+    end
+    return found ? max_val : NaN
 end
 
 function select_modes(values::AbstractMatrix, L::Int, C::Int, mode::Symbol)
@@ -90,9 +114,13 @@ Computes averaged PDFs (over modes) for simulated and observed data.
 """
 function compare_pdfs(sim_values::AbstractMatrix, obs_values::AbstractMatrix;
                       nbins::Int=128)
-    min_val = min(minimum(sim_values), minimum(obs_values))
-    max_val = max(maximum(sim_values), maximum(obs_values))
-    range = (Float64(min_val), Float64(max_val))
+    mins = [val for val in (finite_minimum(sim_values), finite_minimum(obs_values)) if !isnan(val)]
+    maxs = [val for val in (finite_maximum(sim_values), finite_maximum(obs_values)) if !isnan(val)]
+    if isempty(mins) || isempty(maxs)
+        range = (-1.0, 1.0)
+    else
+        range = (Float64(minimum(mins)), Float64(maximum(maxs)))
+    end
 
     centers, sim_pdf = averaged_histogram(sim_values, nbins, range)
     _, obs_pdf = averaged_histogram(obs_values, nbins, range)
@@ -112,8 +140,23 @@ function averaged_histogram(values::AbstractMatrix, nbins::Int, range::Tuple{Flo
 end
 
 function histogram_pdf(data_view, nbins::Int, bounds::Tuple{Float64,Float64})
-    edges = collect(range(bounds[1], bounds[2]; length=nbins + 1))
-    hist = fit(Histogram, vec(data_view), edges; closed=:left)
+    lo, hi = bounds
+    if !isfinite(lo) || !isfinite(hi)
+        lo, hi = -1.0, 1.0
+    elseif lo == hi
+        δ = max(abs(lo), 1.0) * 1e-3 + eps(Float64)
+        lo -= δ
+        hi += δ
+    elseif lo > hi
+        lo, hi = hi, lo
+    end
+    edges = collect(range(lo, hi; length=nbins + 1))
+    finite_values = filter(isfinite, vec(data_view))
+    if isempty(finite_values)
+        centers = (edges[1:end-1] .+ edges[2:end]) ./ 2
+        return centers, zeros(Float64, nbins)
+    end
+    hist = fit(Histogram, finite_values, edges; closed=:left)
     weights = copy(hist.weights)
     total = sum(weights)
     pdf = total == 0 ? fill(0.0, nbins) : vec(weights) ./ total

@@ -27,7 +27,8 @@ end
 Runs denoising score matching with σ = cfg.sigma.
 """
 function train!(model, dataset::NormalizedDataset, cfg::ScoreTrainerConfig;
-                callback::Function = (_, _) -> nothing)
+                callback::Function = (_, _) -> nothing,
+                epoch_callback::Function = (_, _, _) -> nothing)
     n = length(dataset)
     n == 0 && error("Dataset is empty")
     rng = MersenneTwister(cfg.seed)
@@ -40,6 +41,7 @@ function train!(model, dataset::NormalizedDataset, cfg::ScoreTrainerConfig;
     progress = cfg.progress ? Progress(total_steps; desc="Training score network") : nothing
 
     for epoch in 1:cfg.epochs
+        epoch_t0 = time_ns()
         idxs = collect(1:n)
         cfg.shuffle && Random.shuffle!(rng, idxs)
         batches = Iterators.partition(idxs, cfg.batch_size)
@@ -66,6 +68,8 @@ function train!(model, dataset::NormalizedDataset, cfg::ScoreTrainerConfig;
             end
         end
         push!(epoch_losses, accum / max(step, 1))
+        epoch_time = (time_ns() - epoch_t0) / 1e9
+        epoch_callback(epoch, model, epoch_time)
     end
     progress !== nothing && ProgressMeter.finish!(progress)
     return TrainingHistory(epoch_losses, batch_losses)

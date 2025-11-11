@@ -4,6 +4,7 @@ authors = ["Ludovico Giorgi"]
 version = "0.1.0"
 
 [deps]
+BSON = "fbb218c0-5317-5bc6-957e-2ee96dd4b1f0"
 CairoMakie = "13f3f980-e62b-5c42-98c6-ff1f3baf88f0"
 Distributions = "31c24e10-a181-5473-b8eb-7969acd0382f"
 FastSDE = "3f8b8b38-4b49-4d9d-9d97-3a73d63a64a6"

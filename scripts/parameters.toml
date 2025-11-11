@@ -1,0 +1,46 @@
+[data]
+path = "data/new_ks.hdf5"
+dataset_key = "timeseries"
+samples_orientation = "columns"
+train_samples = 20000
+subset_seed = 2025
+
+[model]
+in_channels = 1
+base_channels = 24
+channel_multipliers = [1, 2, 4]
+kernel_size = 5
+periodic = true
+activation = "swish"
+final_activation = "identity"
+init_seed = 314159
+
+[training]
+batch_size = 128
+epochs = 10
+lr = 0.001
+sigma = 0.05
+shuffle = true
+progress = false
+max_steps_per_epoch = 250
+seed = 42
+langevin_eval_interval = 1
+
+[run]
+verbose = true
+
+[langevin]
+dt = 0.005
+nsteps = 6000
+resolution = 20
+n_ensembles = 64
+burn_in = 2500
+nbins = 384
+seed = 21
+mode = "all"
+
+[output]
+run_root = "runs"
+model_repository_path = "scripts/trained_model.bson"
+run_model_filename = "model.bson"
+lag_offsets = [1, 2, 3]

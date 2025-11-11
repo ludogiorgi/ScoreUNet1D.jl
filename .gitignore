@@ -13,3 +13,6 @@
 !scripts/**
 !src/**
 !test/**
+
+# Generated artifacts
+scripts/*.bson
