@@ -7,7 +7,11 @@ using Flux
 using Printf
 using Random
 using ScoreUNet1D
-using ScoreUNet1D: NormalizedDataset, sample_length, num_channels
+using ScoreUNet1D: NormalizedDataset, sample_length, num_channels,
+    MomentMatchingConfig, DriftDiffusionEstimate,
+    CorrelationConfig, CorrelationInfo,
+    compute_drift_diffusion, compute_correlation_info
+using KernelDensity
 using TOML
 
 CairoMakie.activate!()
@@ -16,6 +20,7 @@ const SCRIPT_DIR = @__DIR__
 const PROJECT_ROOT = normpath(joinpath(SCRIPT_DIR, ".."))
 const PARAMETERS_PATH = joinpath(SCRIPT_DIR, "parameters.toml")
 const DEFAULT_LAG_OFFSETS = (1, 2, 3)
+const HEATMAP_BINS = 192
 
 time_in_seconds(ns) = float(ns) / 1e9
 
@@ -133,6 +138,9 @@ function build_trainer_config(params::Dict{String,Any})
 end
 
 function build_langevin_config(params::Dict{String,Any}, trainer_cfg::ScoreTrainerConfig)
+    boundary_val = get(params, "boundary", [-10.0, 10.0])
+    boundary_tuple = boundary_val === nothing ? nothing :
+        (Float64(boundary_val[1]), Float64(boundary_val[2]))
     cfg = LangevinConfig(
         dt = Float64(get(params, "dt", 1e-2)),
         nsteps = Int(get(params, "nsteps", 50_000)),
@@ -143,6 +151,7 @@ function build_langevin_config(params::Dict{String,Any}, trainer_cfg::ScoreTrain
         sigma = trainer_cfg.sigma,
         seed = Int(get(params, "seed", 21)),
         mode = mode_from_value(get(params, "mode", "all")),
+        boundary = boundary_tuple,
     )
     return cfg
 end
@@ -203,9 +212,11 @@ function save_run_metadata(run_dir::AbstractString,
                            configuration_path::AbstractString,
                            training_performed::Bool,
                            training_plot::Union{Nothing,String},
-                           pdf_plot::String,
+                           comparison_plot::String,
                            model_repo_path::String,
-                           run_model_path::String)
+                           run_model_path::String,
+                           moment_matching::Union{Nothing,Dict}=nothing,
+                           correlation_metadata::Union{Nothing,Dict}=nothing)
     run_info = Dict(
         "timestamp" => string(Dates.now()),
         "output_dir" => run_dir,
@@ -223,9 +234,11 @@ function save_run_metadata(run_dir::AbstractString,
         "parameters_file" => configuration_path,
         "model_repository_path" => model_repo_path,
         "run_model_path" => run_model_path,
-        "pdf_plot" => pdf_plot,
+        "comparison_plot" => comparison_plot,
     )
     training_plot !== nothing && (run_info["training_plot"] = training_plot)
+    moment_matching !== nothing && (run_info["moment_matching"] = moment_matching)
+    correlation_metadata !== nothing && (run_info["correlation"] = correlation_metadata)
     payload = Dict(
         "parameters" => params,
         "run" => run_info,
@@ -310,63 +323,93 @@ edges_from_bounds(bounds::Tuple{Float64,Float64}, nbins::Int) =
 
 midpoints(edges::Vector{Float64}) = (edges[1:end-1] .+ edges[2:end]) ./ 2
 
-function histogram2d_from_tensor(tensor::Array{Float32,3}, j::Int,
-                                 x_edges::Vector{Float64}, y_edges::Vector{Float64})
+function pair_samples_tensor(tensor::Array{Float32,3}, j::Int)
     L, C, B = size(tensor)
-    nx = length(x_edges) - 1
-    ny = length(y_edges) - 1
-    counts = zeros(Float64, nx, ny)
+    n = (L - j) * C * B
+    xs = Vector{Float64}(undef, n)
+    ys = Vector{Float64}(undef, n)
+    idx = 1
     @inbounds for b in 1:B, c in 1:C, i in 1:(L - j)
-        x = tensor[i, c, b]
-        y = tensor[i + j, c, b]
-        xi = clamp(searchsortedlast(x_edges, x), 1, nx)
-        yi = clamp(searchsortedlast(y_edges, y), 1, ny)
-        counts[xi, yi] += 1
+        xs[idx] = Float64(tensor[i, c, b])
+        ys[idx] = Float64(tensor[i + j, c, b])
+        idx += 1
     end
-    total = sum(counts)
-    total > 0 && (counts ./= total)
-    return midpoints(x_edges), midpoints(y_edges), counts
+    return xs, ys
+end
+
+function kde_heatmap_tensor(tensor::Array{Float32,3}, j::Int,
+                            bounds::Tuple{Float64,Float64}, npoints::Int)
+    xs, ys = pair_samples_tensor(tensor, j)
+    xgrid = range(bounds[1], bounds[2]; length=npoints)
+    ygrid = range(bounds[1], bounds[2]; length=npoints)
+    kd = kde((xs, ys), (xgrid, ygrid))
+    return kd.x, kd.y, kd.density
 end
 
 function compute_heatmap_specs(sim_tensor::Array{Float32,3},
                                obs_tensor::Array{Float32,3},
                                offsets::Tuple{Vararg{Int}};
-                               nbins::Int=64)
+                               nbins::Int=64,
+                               bounds::Union{Nothing,Tuple{Float64,Float64}}=nothing)
     specs = NamedTuple[]
     for j in offsets
-        sim_x, sim_y = pair_ranges(sim_tensor, j)
-        obs_x, obs_y = pair_ranges(obs_tensor, j)
-        bounds_x = ensure_bounds((min(sim_x[1], obs_x[1]), max(sim_x[2], obs_x[2])))
-        bounds_y = ensure_bounds((min(sim_y[1], obs_y[1]), max(sim_y[2], obs_y[2])))
-        x_edges = edges_from_bounds(bounds_x, nbins)
-        y_edges = edges_from_bounds(bounds_y, nbins)
+        local_bounds = bounds
+        if local_bounds === nothing
+            sim_x, sim_y = pair_ranges(sim_tensor, j)
+            obs_x, obs_y = pair_ranges(obs_tensor, j)
+            low = min(sim_x[1], obs_x[1])
+            high = max(sim_x[2], obs_x[2])
+            local_bounds = ensure_bounds((low, high))
+        end
+        sx, sy, sim_counts = kde_heatmap_tensor(sim_tensor, j, local_bounds, nbins)
+        _, _, obs_counts = kde_heatmap_tensor(obs_tensor, j, local_bounds, nbins)
         push!(specs, (
             j=j,
-            simulated=histogram2d_from_tensor(sim_tensor, j, x_edges, y_edges),
-            observed=histogram2d_from_tensor(obs_tensor, j, x_edges, y_edges),
+            simulated=(sx, sy, sim_counts),
+            observed=(sx, sy, obs_counts),
         ))
     end
     return specs
 end
 
-function save_pdf_diagnostic(result::LangevinResult,
-                             sim_tensor::Array{Float32,3},
-                             obs_tensor::Array{Float32,3},
-                             langevin_cfg::LangevinConfig,
-                             path::AbstractString;
-                             offsets::Tuple{Vararg{Int}}=DEFAULT_LAG_OFFSETS)
-    specs = compute_heatmap_specs(sim_tensor, obs_tensor, offsets)
-    fig = Figure(size=(1200, 1600))
+function save_comparison_figure(result::LangevinResult,
+                                sim_tensor::Array{Float32,3},
+                                obs_tensor::Array{Float32,3},
+                                langevin_cfg::LangevinConfig,
+                                path::AbstractString;
+                                offsets::Tuple{Vararg{Int}}=DEFAULT_LAG_OFFSETS,
+                                value_bounds::Union{Nothing,Tuple{Float64,Float64}}=nothing)
+    specs = compute_heatmap_specs(sim_tensor, obs_tensor, offsets;
+                                  bounds=value_bounds,
+                                  nbins=HEATMAP_BINS)
+    fig = Figure(size=(1400, 1800))
     mode_label = string(langevin_cfg.mode)
-    top_axis = Axis(fig[1, 1:2];
+    pdf_axis = Axis(fig[1, 1];
                     xlabel="Value",
                     ylabel="PDF",
                     title=@sprintf("Averaged PDFs (mode=%s, KL=%.3e)", mode_label, result.kl_divergence))
-    lines!(top_axis, result.bin_centers, result.observed_pdf;
+    lines!(pdf_axis, result.bin_centers, result.observed_pdf;
            color=:navy, linewidth=2.0, label="Observed")
-    lines!(top_axis, result.bin_centers, result.simulated_pdf;
+    lines!(pdf_axis, result.bin_centers, result.simulated_pdf;
            color=:firebrick, linewidth=2.0, label="Langevin")
-    axislegend(top_axis, position=:rb)
+    if value_bounds !== nothing
+        xlims!(pdf_axis, value_bounds...)
+    end
+    axislegend(pdf_axis, position=:rb)
+
+    acf_axis = Axis(fig[1, 2];
+                    xlabel="Time",
+                    ylabel="Average ACF",
+                    title=@sprintf("Autocorrelation (τ_dec≈%.2f)", something(result.decorrelation_time, 0.0)))
+    if result.observed_acf !== nothing && result.acf_time !== nothing
+        lines!(acf_axis, result.acf_time, result.observed_acf;
+               color=:navy, linewidth=2.0, label="Observed ACF")
+    end
+    if result.simulated_acf !== nothing && result.acf_time !== nothing
+        lines!(acf_axis, result.acf_time, result.simulated_acf;
+               color=:firebrick, linewidth=2.0, label="Langevin ACF")
+    end
+    axislegend(acf_axis, position=:rt)
 
     for (row, spec) in enumerate(specs)
         lx = Axis(fig[row + 1, 1];
@@ -381,6 +424,12 @@ function save_pdf_diagnostic(result::LangevinResult,
         dx, dy, obs_counts = spec.observed
         heatmap!(lx, sx, sy, sim_counts; colormap=:plasma)
         heatmap!(rx, dx, dy, obs_counts; colormap=:plasma)
+        if value_bounds !== nothing
+            xlims!(lx, value_bounds...)
+            ylims!(lx, value_bounds...)
+            xlims!(rx, value_bounds...)
+            ylims!(rx, value_bounds...)
+        end
     end
     save(path, fig; px_per_unit=1)
     return path
@@ -397,20 +446,29 @@ function run_training_and_monitor!(model,
                                    train_data::NormalizedDataset,
                                    trainer_cfg::ScoreTrainerConfig,
                                    langevin_cfg::LangevinConfig,
+                                   mm_cfg::MomentMatchingConfig,
+                                   corr_info::CorrelationInfo,
                                    eval_interval::Int,
                                    verbose::Bool)
     interval = max(eval_interval, 0)
     kl_epochs = Int[]
     kl_values = Float64[]
     last_result = Ref{Union{Nothing,LangevinResult}}(nothing)
+    last_mm = Ref{Union{Nothing,DriftDiffusionEstimate}}(nothing)
 
     function evaluate!(epoch, current_model, label_suffix)
+        mm = timed("Moment matching ($label_suffix)", verbose) do
+            compute_drift_diffusion(current_model, dataset, trainer_cfg, mm_cfg)
+        end
+        langevin_cfg.phi = mm.phi
+        langevin_cfg.diffusion = mm.sigma
         res = timed("Langevin integration ($label_suffix)", verbose) do
-            run_langevin(current_model, dataset, langevin_cfg)
+            run_langevin(current_model, dataset, langevin_cfg, corr_info)
         end
         push!(kl_epochs, epoch)
         push!(kl_values, res.kl_divergence)
         last_result[] = res
+        last_mm[] = mm
         @info "Epoch $(epoch) KL divergence" value=res.kl_divergence
     end
 
@@ -429,7 +487,7 @@ function run_training_and_monitor!(model,
         evaluate!(trainer_cfg.epochs, model, "epoch $(trainer_cfg.epochs)")
     end
     final_result = last_result[]
-    return history, kl_epochs, kl_values, final_result
+    return history, kl_epochs, kl_values, final_result, last_mm[]
 end
 
 function main()
@@ -448,6 +506,7 @@ function main()
     samples_orientation = symbol_from_string(get(data_params, "samples_orientation", "rows"))
     train_samples = Int(get(data_params, "train_samples", 0))
     subset_seed = Int(get(data_params, "subset_seed", 0))
+    data_dt = Float64(get(data_params, "dt", 1.0))
 
     dataset = timed("Loading dataset", verbose) do
         load_hdf5_dataset(data_path;
@@ -455,6 +514,9 @@ function main()
                           samples_orientation=samples_orientation)
     end
     @info "Loaded dataset" size=size(dataset.data)
+    raw_min = Float64(minimum(dataset.data))
+    raw_max = Float64(maximum(dataset.data))
+    value_bounds = ensure_bounds((raw_min, raw_max))
 
     train_data = timed("Preparing training subset", verbose) do
         subset_dataset(dataset, train_samples; seed=subset_seed)
@@ -466,6 +528,26 @@ function main()
     langevin_cfg = build_langevin_config(langevin_params, trainer_cfg)
     output_cfg = build_output_config(output_params)
     eval_interval = Int(get(training_params, "langevin_eval_interval", 1))
+    mm_params = get(params, "moment_matching", Dict{String,Any}())
+    mm_cfg = MomentMatchingConfig(
+        dt = Float64(get(mm_params, "dt", data_dt)),
+        max_samples = Int(get(mm_params, "max_samples", 4096)),
+        stride = Int(get(mm_params, "stride", 10)),
+        batch_size = Int(get(mm_params, "batch_size", 256)),
+        min_eig = Float64(get(mm_params, "min_eig", 1e-6)),
+        seed = Int(get(mm_params, "seed", 0)),
+    )
+    corr_params = get(params, "correlation", Dict{String,Any}())
+    corr_cfg = CorrelationConfig(
+        dt = Float64(get(corr_params, "dt", data_dt)),
+        max_lag = Int(get(corr_params, "max_lag", 512)),
+        stride = Int(get(corr_params, "stride", 1)),
+        threshold = Float64(get(corr_params, "threshold", exp(-1))),
+        multiple = Float64(get(corr_params, "multiple", 3.0)),
+    )
+    corr_info = timed("Computing data autocorrelation", verbose) do
+        compute_correlation_info(dataset, corr_cfg)
+    end
 
     model_repo_path = output_cfg.model_repository_path
     run_root = output_cfg.run_root
@@ -491,24 +573,36 @@ function main()
     kl_history = Float64[]
     training_performed = false
     result = nothing
+    mm_result = nothing
 
     if model_exists
+        mm_result = timed("Moment matching (pretrained model)", verbose) do
+            compute_drift_diffusion(model, dataset, trainer_cfg, mm_cfg)
+        end
+        langevin_cfg.phi = mm_result.phi
+        langevin_cfg.diffusion = mm_result.sigma
         result = timed("Langevin integration (pretrained model)", verbose) do
-            run_langevin(model, dataset, langevin_cfg)
+            run_langevin(model, dataset, langevin_cfg, corr_info)
         end
     else
         training_performed = true
-        history, kl_epochs, kl_history, result = run_training_and_monitor!(model, dataset, train_data,
-                                                                           trainer_cfg, langevin_cfg,
-                                                                           eval_interval, verbose)
+        history, kl_epochs, kl_history, result, mm_result = run_training_and_monitor!(
+            model, dataset, train_data, trainer_cfg, langevin_cfg,
+            mm_cfg, corr_info, eval_interval, verbose)
         timed("Saving reusable model checkpoint", verbose) do
             save_model(model_repo_path, model, model_cfg)
         end
     end
 
+    mm_result === nothing && error("Moment matching estimation missing")
+
     run_model_path = joinpath(run_dir, run_model_filename)
     timed("Saving run-specific model checkpoint", verbose) do
         save_model(run_model_path, model, model_cfg)
+    end
+    mm_path = joinpath(run_dir, "moment_matching.bson")
+    timed("Saving moment matching matrices", verbose) do
+        BSON.@save mm_path phi=mm_result.phi sigma=mm_result.sigma samples=mm_result.samples
     end
 
     training_plot = nothing
@@ -520,11 +614,29 @@ function main()
     end
 
     sim_tensor = reshape_langevin_samples(result, dataset)
-    pdf_plot = timed("Generating PDF comparison figure", verbose) do
-        save_pdf_diagnostic(result, sim_tensor, dataset.data, langevin_cfg,
-                            joinpath(run_dir, "pdf_comparison.png");
-                            offsets=lag_offsets)
+    comparison_plot = timed("Generating PDF comparison figure", verbose) do
+        save_comparison_figure(result, sim_tensor, dataset.data, langevin_cfg,
+                               joinpath(run_dir, "comparison.png");
+                               offsets=lag_offsets,
+                               value_bounds=value_bounds)
     end
+
+    mm_metadata = Dict(
+        "samples_used" => mm_result.samples,
+        "dt" => mm_cfg.dt,
+        "max_samples" => mm_cfg.max_samples,
+        "stride" => mm_cfg.stride,
+        "batch_size" => mm_cfg.batch_size,
+        "min_eig" => mm_cfg.min_eig,
+        "moment_matching_path" => mm_path,
+    )
+    corr_metadata = Dict(
+        "decorrelation_time" => corr_info.decorrelation_time,
+        "time_window" => corr_info.time[end],
+        "stride" => corr_cfg.stride,
+        "max_lag" => corr_cfg.max_lag,
+        "threshold" => corr_cfg.threshold,
+    )
 
     config_path = timed("Writing run metadata", verbose) do
         save_run_metadata(run_dir, params, history, kl_epochs, kl_history, result;
@@ -536,13 +648,15 @@ function main()
                           configuration_path=params_copy,
                           training_performed=training_performed,
                           training_plot=training_plot,
-                          pdf_plot=pdf_plot,
+                          comparison_plot=comparison_plot,
                           model_repo_path=model_repo_path,
-                          run_model_path=run_model_path)
+                          run_model_path=run_model_path,
+                          moment_matching=mm_metadata,
+                          correlation_metadata=corr_metadata)
     end
 
     @printf("KL divergence: %.6e\n", result.kl_divergence)
-    @info "Run artifacts saved" dir=run_dir training_plot=training_plot pdf_plot=pdf_plot config=config_path model=run_model_path
+    @info "Run artifacts saved" dir=run_dir training_plot=training_plot comparison_plot=comparison_plot config=config_path model=run_model_path
     return result
 end
 
