@@ -19,25 +19,35 @@ sample_length(dataset::NormalizedDataset) = size(dataset.data, 1)
 num_channels(dataset::NormalizedDataset) = size(dataset.data, 2)
 
 """
-    load_hdf5_dataset(path; dataset_key=nothing, normalize=true, samples_orientation=:rows)
+    load_hdf5_dataset(path; dataset_key=nothing, normalize=true, samples_orientation=:rows, stride=1)
 
 Loads the dataset stored in `data/` as an HDF5 tensor, reshapes it to
 `(length, channels, batch)`, and optionally normalizes it. Set
 `samples_orientation = :columns` when each column represents an independent
-sample (as in the KS dataset).
+sample (as in the KS dataset). Use `stride` to subsample modes along the length
+dimension *before* normalization (e.g. `stride=4` keeps modes `1,5,9,…`).
 """
 function load_hdf5_dataset(path::AbstractString;
                            dataset_key::Union{Nothing,String}=nothing,
                            normalize::Bool=true,
-                           samples_orientation::Symbol=:rows)
+                           samples_orientation::Symbol=:rows,
+                           stride::Integer=1)
     raw = read_hdf5_array(path, dataset_key)
     raw = orient_samples(raw, samples_orientation)
     tensor = ensure_tensor_layout(raw)
+    tensor = apply_stride(tensor, stride)
     tensor = Array{Float32,3}(tensor)
     return normalize ? normalize_dataset(tensor) :
         NormalizedDataset(tensor,
                           DataStats(zeros(Float32, size(tensor,2), size(tensor,1)),
                                     ones(Float32, size(tensor,2), size(tensor,1))))
+end
+
+function apply_stride(tensor::AbstractArray{T,3}, stride::Integer) where {T}
+    stride_val = max(Int(stride), 1)
+    size(tensor, 1) >= 1 || error("Tensor must have a positive length dimension")
+    stride_val == 1 && return tensor
+    return @view tensor[1:stride_val:end, :, :]
 end
 
 function orient_samples(data, orientation::Symbol)

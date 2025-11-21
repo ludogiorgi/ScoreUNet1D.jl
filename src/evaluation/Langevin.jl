@@ -18,8 +18,6 @@ Base.@kwdef mutable struct LangevinConfig
     seed::Int = 21
     mode::Union{Symbol,Int} = :all
     boundary::Union{Nothing,Tuple{Float64,Float64}} = (-10.0, 10.0)
-    phi::Union{Nothing,Matrix{Float64}} = nothing
-    diffusion::Union{Nothing,Matrix{Float64}} = nothing
 end
 
 struct LangevinResult
@@ -39,20 +37,17 @@ struct DriftWorkspace
     tensor::Array{Float32,3}
     flat::Vector{Float32}
     score::Vector{Float64}
-    drift::Union{Nothing,Vector{Float64}}
 end
 
-function DriftWorkspace(L::Int, C::Int, dim::Int, need_drift::Bool)
+function DriftWorkspace(L::Int, C::Int, dim::Int)
     tensor = Array{Float32}(undef, L, C, 1)
     flat = reshape(tensor, :)
     score = zeros(Float64, dim)
-    drift = need_drift ? zeros(Float64, dim) : nothing
-    return DriftWorkspace(tensor, flat, score, drift)
+    return DriftWorkspace(tensor, flat, score)
 end
 
-function create_langevin_drift(model, sigma::Real, phi::Union{Nothing,Matrix{Float64}},
-                               L::Int, C::Int, dim::Int)
-    workspaces = [DriftWorkspace(L, C, dim, phi !== nothing) for _ in 1:nthreads()]
+function create_langevin_drift(model, sigma::Real, L::Int, C::Int, dim::Int)
+    workspaces = [DriftWorkspace(L, C, dim) for _ in 1:nthreads()]
     function drift_single!(du, u, _, _)
         ws = workspaces[threadid()]
         @inbounds @simd for i in 1:dim
@@ -63,25 +58,11 @@ function create_langevin_drift(model, sigma::Real, phi::Union{Nothing,Matrix{Flo
         @inbounds @simd for i in 1:dim
             ws.score[i] = Float64(score_vec[i])
         end
-        if phi === nothing
-            copyto!(du, ws.score)
-        else
-            tmp = ws.drift::Vector{Float64}
-            mul!(tmp, phi, ws.score)
-            copyto!(du, tmp)
-        end
+        copyto!(du, ws.score)
         return nothing
     end
     drift_single!(du, u, t) = drift_single!(du, u, nothing, t)
     return drift_single!
-end
-
-function make_diffusion(sigma_matrix::Union{Nothing,Matrix{Float64}})
-    if sigma_matrix === nothing
-        return sqrt(2.0)
-    else
-        return sqrt(2.0) .* sigma_matrix
-    end
 end
 
 """
@@ -96,12 +77,10 @@ function run_langevin(model, dataset::NormalizedDataset, cfg::LangevinConfig,
     C = num_channels(dataset)
     dim = L * C
     n_ens = max(cfg.n_ensembles, 1)
-    phi = cfg.phi
-    sigma_matrix = cfg.diffusion
-    diffusion_arg = make_diffusion(sigma_matrix)
+    diffusion_arg = sqrt(2.0)
     dt = Float64(cfg.dt)
 
-    drift_single! = create_langevin_drift(model, cfg.sigma, phi, L, C, dim)
+    drift_single! = create_langevin_drift(model, cfg.sigma, L, C, dim)
 
     trajectories = Vector{Matrix{Float64}}(undef, n_ens)
     Threads.@threads for ens in 1:n_ens
@@ -301,4 +280,78 @@ function relative_entropy(p::AbstractVector, q::AbstractVector)
         acc += pi * log(pi / qi)
     end
     return acc
+end
+
+function compute_stein_matrix(model,
+                              dataset::NormalizedDataset,
+                              sigma::Real;
+                              batch_size::Int=256,
+                              device::ExecutionDevice=CPUDevice(),
+                              sample_stride::Int=1)
+    L = sample_length(dataset)
+    C = num_channels(dataset)
+    dim = L * C
+    idxs = collect(1:sample_stride:length(dataset))
+    isempty(idxs) && error("No samples available for Stein estimation")
+    batches = collect(Iterators.partition(idxs, batch_size))
+    total = 0
+
+    if device isa GPUDevice && gpu_count(device) > 1
+        ndev = min(gpu_count(device), length(batches))
+        partials = [zeros(Float64, dim, dim) for _ in 1:ndev]
+        counts = zeros(Int, ndev)
+        Threads.@threads for worker in 1:ndev
+            gpu_idx = worker
+            local_model = move_model(model, device; device_index=gpu_idx)
+            local_V = partials[gpu_idx]
+            local_count = 0
+            for batch_id in worker:ndev:length(batches)
+                batch_idxs = batches[batch_id]
+                batch_cpu = Array(dataset.data[:, :, batch_idxs])
+                dev_batch = move_array(batch_cpu, device; device_index=gpu_idx)
+                scores = score_from_model(local_model, dev_batch, sigma)
+                score_mat = Array(reshape(scores, dim, size(batch_cpu, 3)))
+                x_mat = Array(reshape(dev_batch, dim, size(batch_cpu, 3)))
+                local_V .+= score_mat * transpose(x_mat)
+                local_count += length(batch_idxs)
+            end
+            partials[gpu_idx] = local_V
+            counts[gpu_idx] = local_count
+        end
+        total = sum(counts)
+        total > 0 || error("No samples processed for Stein estimation")
+        return reduce(+, partials) ./ total
+    elseif device isa GPUDevice
+        model_on_device = move_model(model, device)
+        stein_acc = zeros(Float64, dim, dim)
+        for batch_idxs in batches
+            batch_cpu = Array(dataset.data[:, :, batch_idxs])
+            dev_batch = move_array(batch_cpu, device)
+            scores = score_from_model(model_on_device, dev_batch, sigma)
+            score_mat = Array(reshape(scores, dim, size(batch_cpu, 3)))
+            x_mat = Array(reshape(dev_batch, dim, size(batch_cpu, 3)))
+            stein_acc .+= score_mat * transpose(x_mat)
+            total += length(batch_idxs)
+        end
+        total > 0 || error("No samples processed for Stein estimation")
+        return stein_acc ./ total
+    else
+        model_on_device = model
+        nworkers = nthreads()
+        partials = [zeros(Float64, dim, dim) for _ in 1:nworkers]
+        counts = zeros(Int, nworkers)
+        Threads.@threads for batch_id in 1:length(batches)
+            tid = threadid()
+            batch_idxs = batches[batch_id]
+            batch_cpu = Array(dataset.data[:, :, batch_idxs])
+            scores = score_from_model(model_on_device, batch_cpu, sigma)
+            score_mat = Float64.(reshape(scores, dim, size(batch_cpu, 3)))
+            x_mat = Float64.(reshape(batch_cpu, dim, size(batch_cpu, 3)))
+            partials[tid] .+= score_mat * transpose(x_mat)
+            counts[tid] += length(batch_idxs)
+        end
+        total = sum(counts)
+        total > 0 || error("No samples processed for Stein estimation")
+        return reduce(+, partials) ./ total
+    end
 end

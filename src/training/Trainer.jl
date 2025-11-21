@@ -4,6 +4,7 @@ using Flux.Optimisers
 using Random
 using ProgressMeter
 using Base.Threads
+import CUDA
 
 Base.@kwdef mutable struct ScoreTrainerConfig
     batch_size::Int = 32
@@ -28,12 +29,14 @@ Runs denoising score matching with σ = cfg.sigma.
 """
 function train!(model, dataset::NormalizedDataset, cfg::ScoreTrainerConfig;
                 callback::Function = (_, _) -> nothing,
-                epoch_callback::Function = (_, _, _) -> nothing)
+                epoch_callback::Function = (_, _, _) -> nothing,
+                device::ExecutionDevice=CPUDevice())
     n = length(dataset)
     n == 0 && error("Dataset is empty")
     rng = MersenneTwister(cfg.seed)
     thread_rngs = seed_thread_rngs(cfg.seed)
-    opt_state = Flux.setup(Flux.Optimisers.Adam(cfg.lr), model)
+    model_on_device = model
+    opt_state = Flux.setup(Flux.Optimisers.Adam(cfg.lr), model_on_device)
     epoch_losses = Float32[]
     batch_losses = Float32[]
     steps_per_epoch = ceil(Int, n / cfg.batch_size)
@@ -48,15 +51,15 @@ function train!(model, dataset::NormalizedDataset, cfg::ScoreTrainerConfig;
         step = 0
         accum = 0.0
         for batch_idxs in batches
-            batch = Array(dataset.data[:, :, batch_idxs])
-            noise = similar(batch)
-            fill_noise!(noise, thread_rngs)
+            batch_cpu = Array(dataset.data[:, :, batch_idxs])
+            batch = move_array(batch_cpu, device)
+            noise = noise_like(batch, device, thread_rngs)
             noisy = batch .+ cfg.sigma .* noise
-            loss, grads = Flux.withgradient(model) do m
+            loss, grads = Flux.withgradient(model_on_device) do m
                 pred = m(noisy)
                 mse(pred, noise)
             end
-            opt_state, model = Flux.update!(opt_state, model, grads[1])
+            opt_state, model_on_device = Flux.update!(opt_state, model_on_device, grads[1])
             loss32 = Float32(loss)
             push!(batch_losses, loss32)
             accum += loss32
@@ -69,7 +72,7 @@ function train!(model, dataset::NormalizedDataset, cfg::ScoreTrainerConfig;
         end
         push!(epoch_losses, accum / max(step, 1))
         epoch_time = (time_ns() - epoch_t0) / 1e9
-        epoch_callback(epoch, model, epoch_time)
+        epoch_callback(epoch, model_on_device, epoch_time)
     end
     progress !== nothing && ProgressMeter.finish!(progress)
     return TrainingHistory(epoch_losses, batch_losses)
@@ -87,10 +90,21 @@ function score_from_model(model, batch, sigma::Real)
 end
 
 function seed_thread_rngs(seed::Int)
-    return [MersenneTwister(seed)]
+    return [MersenneTwister(seed + tid) for tid in 1:nthreads()]
 end
 
 function fill_noise!(buffer, rngs::Vector{<:AbstractRNG})
-    randn!(rngs[1], buffer)
+    idx = clamp(threadid(), 1, length(rngs))
+    randn!(rngs[idx], buffer)
     return buffer
+end
+
+function noise_like(batch, device::ExecutionDevice, rngs::Vector{<:AbstractRNG})
+    noise = similar(batch)
+    if device isa GPUDevice
+        CUDA.randn!(noise)
+    else
+        fill_noise!(noise, rngs)
+    end
+    return noise
 end

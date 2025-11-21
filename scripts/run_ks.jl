@@ -4,13 +4,13 @@ using BSON
 using CairoMakie
 using Dates
 using Flux
+using LinearAlgebra
 using Printf
 using Random
 using ScoreUNet1D
 using ScoreUNet1D: NormalizedDataset, sample_length, num_channels,
-    MomentMatchingConfig, DriftDiffusionEstimate,
-    CorrelationConfig, CorrelationInfo,
-    compute_drift_diffusion, compute_correlation_info
+    ExecutionDevice, CPUDevice, GPUDevice, select_device, move_model,
+    activate_device!, is_gpu, gpu_count, compute_stein_matrix
 using KernelDensity
 using TOML
 
@@ -221,8 +221,7 @@ function save_run_metadata(run_dir::AbstractString,
                            comparison_plot::String,
                            model_repo_path::String,
                            run_model_path::String,
-                           moment_matching::Union{Nothing,Dict}=nothing,
-                           correlation_metadata::Union{Nothing,Dict}=nothing)
+                           stein_distance::Real)
     run_info = Dict(
         "timestamp" => string(Dates.now()),
         "output_dir" => run_dir,
@@ -237,14 +236,13 @@ function save_run_metadata(run_dir::AbstractString,
         "kl_epochs" => kl_epochs,
         "kl_history" => kl_history,
         "final_kl" => result.kl_divergence,
+        "stein_distance" => stein_distance,
         "parameters_file" => configuration_path,
         "model_repository_path" => model_repo_path,
         "run_model_path" => run_model_path,
         "comparison_plot" => comparison_plot,
     )
     training_plot !== nothing && (run_info["training_plot"] = training_plot)
-    moment_matching !== nothing && (run_info["moment_matching"] = moment_matching)
-    correlation_metadata !== nothing && (run_info["correlation"] = correlation_metadata)
     payload = Dict(
         "parameters" => params,
         "run" => run_info,
@@ -384,11 +382,15 @@ function save_comparison_figure(result::LangevinResult,
                                 langevin_cfg::LangevinConfig,
                                 path::AbstractString;
                                 offsets::Tuple{Vararg{Int}}=DEFAULT_LAG_OFFSETS,
-                                value_bounds::Union{Nothing,Tuple{Float64,Float64}}=nothing)
+                                value_bounds::Union{Nothing,Tuple{Float64,Float64}}=nothing,
+                                stein_matrix=nothing,
+                                stein_distance=nothing)
     specs = compute_heatmap_specs(sim_tensor, obs_tensor, offsets;
                                   bounds=value_bounds,
                                   nbins=HEATMAP_BINS)
-    fig = Figure(size=(1400, 1800))
+    stein_matrix === nothing && error("stein_matrix is required to build comparison figure")
+    stein_distance === nothing && error("stein_distance is required to build comparison figure")
+    fig = Figure(size=(1600, 1800))
     mode_label = string(langevin_cfg.mode)
     pdf_axis = Axis(fig[1, 1];
                     xlabel="Value",
@@ -403,30 +405,19 @@ function save_comparison_figure(result::LangevinResult,
     end
     axislegend(pdf_axis, position=:rb)
 
-    acf_axis = Axis(fig[1, 2];
-                    xlabel="Time",
-                    ylabel="Average ACF",
-                    title=@sprintf("Autocorrelation (τ_dec≈%.2f)", something(result.decorrelation_time, 0.0)))
-    obs_time = result.observed_time
-    sim_time = result.simulated_time
-    if result.observed_acf !== nothing && obs_time !== nothing
-        lines!(acf_axis, obs_time, result.observed_acf;
-               color=:navy, linewidth=2.0, label="Observed ACF")
-    end
-    if result.simulated_acf !== nothing && sim_time !== nothing
-        lines!(acf_axis, sim_time, result.simulated_acf;
-               color=:firebrick, linewidth=2.0, label="Langevin ACF")
-    end
-    limit_time = nothing
-    if obs_time !== nothing && sim_time !== nothing
-        limit_time = min(obs_time[end], sim_time[end])
-    elseif obs_time !== nothing
-        limit_time = obs_time[end]
-    elseif sim_time !== nothing
-        limit_time = sim_time[end]
-    end
-    limit_time !== nothing && xlims!(acf_axis, 0, limit_time)
-    axislegend(acf_axis, position=:rt)
+    stein_dim = size(stein_matrix, 1)
+    vmax = maximum(abs.(stein_matrix))
+    vmax = vmax == 0 ? 1.0 : vmax
+    stein_axis = Axis(fig[1, 2];
+                      xlabel="Dimension",
+                      ylabel="Dimension",
+                      title=@sprintf("Stein V=<s(x)x^T>, ||V+I||_F=%.3e", stein_distance))
+    stein_heatmap = heatmap!(stein_axis, 1:stein_dim, 1:stein_dim, stein_matrix;
+                             colormap=:balance,
+                             colorrange=(-vmax, vmax))
+    stein_axis.xgridvisible = false
+    stein_axis.ygridvisible = false
+    Colorbar(fig[1, 3], stein_heatmap; label="V", width=14)
 
     for (row, spec) in enumerate(specs)
         lx = Axis(fig[row + 1, 1];
@@ -463,34 +454,19 @@ function run_training_and_monitor!(model,
                                    train_data::NormalizedDataset,
                                    trainer_cfg::ScoreTrainerConfig,
                                    langevin_cfg::LangevinConfig,
-                                   mm_cfg::MomentMatchingConfig,
-                                   corr_info::CorrelationInfo,
+                                   corr_info,
                                    eval_interval::Int,
                                    verbose::Bool,
-                                   mm_dataset::NormalizedDataset,
-                                   phi_enabled::Bool)
+                                   device::ExecutionDevice)
     interval = max(eval_interval, 0)
     kl_epochs = Int[]
     kl_values = Float64[]
     last_result = Ref{Union{Nothing,LangevinResult}}(nothing)
-    last_mm = Ref{Union{Nothing,DriftDiffusionEstimate}}(nothing)
 
     function evaluate!(epoch, current_model, label_suffix)
-        if phi_enabled
-            mm = timed("Moment matching ($label_suffix)", verbose) do
-                compute_drift_diffusion(current_model, mm_dataset, trainer_cfg, mm_cfg, corr_info;
-                                        apply_correction=true, verbose=verbose)
-            end
-            langevin_cfg.phi = mm.phi
-            langevin_cfg.diffusion = mm.sigma
-            last_mm[] = mm
-        else
-            langevin_cfg.phi = nothing
-            langevin_cfg.diffusion = nothing
-            last_mm[] = nothing
-        end
         res = timed("Langevin integration ($label_suffix)", verbose) do
-            run_langevin(current_model, pdf_dataset, langevin_cfg, corr_info)
+            eval_model = device isa GPUDevice ? move_model(current_model, CPUDevice()) : current_model
+            run_langevin(eval_model, pdf_dataset, langevin_cfg, corr_info)
         end
         push!(kl_epochs, epoch)
         push!(kl_values, res.kl_divergence)
@@ -507,13 +483,14 @@ function run_training_and_monitor!(model,
 
     history = timed("Training loop", verbose) do
         train!(model, train_data, trainer_cfg;
-               epoch_callback=epoch_callback)
+               epoch_callback=epoch_callback,
+               device=device)
     end
     if isempty(kl_epochs) || kl_epochs[end] != trainer_cfg.epochs
         evaluate!(trainer_cfg.epochs, model, "epoch $(trainer_cfg.epochs)")
     end
     final_result = last_result[]
-    return history, kl_epochs, kl_values, final_result, last_mm[]
+    return history, kl_epochs, kl_values, final_result
 end
 
 function main()
@@ -525,6 +502,10 @@ function main()
     output_params = get(params, "output", Dict{String,Any}())
     run_params = get(params, "run", Dict{String,Any}())
     verbose = get(run_params, "verbose", false)
+    device_name = uppercase(String(get(run_params, "device", "CPU")))
+    device = select_device(device_name)
+    activate_device!(device)
+    @info "Execution device selected" device=device_name gpus=is_gpu(device) ? gpu_count(device) : 0
 
     data_path = resolve_path(get(data_params, "path", "data/new_ks.hdf5"))
     dataset_key = get(data_params, "dataset_key", nothing)
@@ -532,19 +513,19 @@ function main()
     samples_orientation = symbol_from_string(get(data_params, "samples_orientation", "rows"))
     train_samples = Int(get(data_params, "train_samples", 0))
     subset_seed = Int(get(data_params, "subset_seed", 0))
+    mode_stride = Int(get(data_params, "stride", 1))
     data_dt = Float64(get(data_params, "dt", 1.0))
 
     dataset = timed("Loading dataset", verbose) do
         load_hdf5_dataset(data_path;
                           dataset_key=dataset_key,
-                          samples_orientation=samples_orientation)
+                          samples_orientation=samples_orientation,
+                          stride=mode_stride)
     end
     @info "Loaded dataset" size=size(dataset.data)
     raw_min = Float64(minimum(dataset.data))
     raw_max = Float64(maximum(dataset.data))
     value_bounds = ensure_bounds((raw_min, raw_max))
-    hr_dataset = dataset
-    hr_data_path = data_path
 
     train_data = timed("Preparing training subset", verbose) do
         subset_dataset(dataset, train_samples; seed=subset_seed)
@@ -552,31 +533,26 @@ function main()
     @info "Training subset" size=size(train_data.data) nmax=train_samples
 
     model_cfg, model_seed = build_model_config(model_params)
+    L = sample_length(dataset)
+    max_levels = max(1, floor(Int, log2(max(L, 2))))
+    if length(model_cfg.channel_multipliers) > max_levels
+        @warn "Reducing UNet depth to fit short sequences" requested_levels=length(model_cfg.channel_multipliers) max_levels=max_levels
+        model_cfg = deepcopy(model_cfg)
+        model_cfg.channel_multipliers = model_cfg.channel_multipliers[1:max_levels]
+    end
+    levels = length(model_cfg.channel_multipliers)
+    deepest_L = max(1, L ÷ (2^(levels - 1)))
+    max_kernel = deepest_L <= 2 ? 1 : min(L, deepest_L)
+    if model_cfg.kernel_size > max_kernel
+        @warn "Clamping kernel_size for smallest feature map" requested=model_cfg.kernel_size length=L deepest_length=deepest_L
+        model_cfg = deepcopy(model_cfg)
+        model_cfg.kernel_size = max_kernel
+    end
     trainer_cfg = build_trainer_config(training_params)
     langevin_cfg = build_langevin_config(langevin_params, trainer_cfg, data_dt)
     output_cfg = build_output_config(output_params)
     eval_interval = Int(get(training_params, "langevin_eval_interval", 1))
-    mm_params = get(params, "moment_matching", Dict{String,Any}())
-    phi_enabled = get(mm_params, "phi", true)
-    mm_cfg = MomentMatchingConfig(
-        dt = Float64(get(mm_params, "dt", data_dt)),
-        max_samples = Int(get(mm_params, "max_samples", 4096)),
-        stride = Int(get(mm_params, "stride", 10)),
-        batch_size = Int(get(mm_params, "batch_size", 256)),
-        min_eig = Float64(get(mm_params, "min_eig", 1e-6)),
-        seed = Int(get(mm_params, "seed", 0)),
-    )
-    corr_params = get(params, "correlation", Dict{String,Any}())
-    corr_cfg = CorrelationConfig(
-        dt = Float64(get(corr_params, "dt", data_dt)),
-        max_lag = Int(get(corr_params, "max_lag", 512)),
-        stride = Int(get(corr_params, "stride", 1)),
-        threshold = Float64(get(corr_params, "threshold", exp(-1))),
-        multiple = Float64(get(corr_params, "multiple", 3.0)),
-    )
-    corr_info = timed("Computing data autocorrelation", verbose) do
-        compute_correlation_info(dataset, corr_cfg)
-    end
+    corr_info = nothing
 
     model_repo_path = output_cfg.model_repository_path
     run_root = output_cfg.run_root
@@ -596,53 +572,37 @@ function main()
     else
         model = instantiate_model(model_cfg, model_seed)
     end
+    model = move_model(model, device)
 
     history = TrainingHistory(Float32[], Float32[])
     kl_epochs = Int[]
     kl_history = Float64[]
     training_performed = false
     result = nothing
-    mm_result = nothing
 
     if model_exists
-        if phi_enabled
-            mm_result = timed("Moment matching (pretrained model)", verbose) do
-                compute_drift_diffusion(model, hr_dataset, trainer_cfg, mm_cfg, corr_info;
-                                        apply_correction=true, verbose=verbose)
-            end
-            langevin_cfg.phi = mm_result.phi
-            langevin_cfg.diffusion = mm_result.sigma
-        else
-            langevin_cfg.phi = nothing
-            langevin_cfg.diffusion = nothing
-        end
+        langevin_model = device isa GPUDevice ? move_model(model, CPUDevice()) : model
         result = timed("Langevin integration (pretrained model)", verbose) do
-            run_langevin(model, dataset, langevin_cfg, corr_info)
+            run_langevin(langevin_model, dataset, langevin_cfg, corr_info)
         end
     else
         training_performed = true
-        history, kl_epochs, kl_history, result, mm_result = run_training_and_monitor!(
+        history, kl_epochs, kl_history, result = run_training_and_monitor!(
             model, dataset, train_data, trainer_cfg, langevin_cfg,
-            mm_cfg, corr_info, eval_interval, verbose, dataset, phi_enabled)
-        timed("Saving reusable model checkpoint", verbose) do
-            save_model(model_repo_path, model, model_cfg)
-        end
+            corr_info, eval_interval, verbose, device)
     end
 
-    if phi_enabled && mm_result === nothing
-        error("Moment matching estimation missing")
+    model_cpu = device isa GPUDevice ? move_model(model, CPUDevice()) : model
+
+    if training_performed
+        timed("Saving reusable model checkpoint", verbose) do
+            save_model(model_repo_path, model_cpu, model_cfg)
+        end
     end
 
     run_model_path = joinpath(run_dir, run_model_filename)
     timed("Saving run-specific model checkpoint", verbose) do
-        save_model(run_model_path, model, model_cfg)
-    end
-    mm_path = nothing
-    if phi_enabled && mm_result !== nothing
-        mm_path = joinpath(run_dir, "moment_matching.bson")
-        timed("Saving moment matching matrices", verbose) do
-            BSON.@save mm_path phi=mm_result.phi sigma=mm_result.sigma samples=mm_result.samples
-        end
+        save_model(run_model_path, model_cpu, model_cfg)
     end
 
     training_plot = nothing
@@ -653,32 +613,24 @@ function main()
         end
     end
 
+    stein_matrix = timed("Estimating Stein matrix", verbose) do
+        compute_stein_matrix(model, dataset, trainer_cfg.sigma;
+                             batch_size=trainer_cfg.batch_size,
+                             device=device)
+    end
+    stein_dim = size(stein_matrix, 1)
+    eye = Matrix{Float64}(I, stein_dim, stein_dim)
+    stein_distance = sqrt(sum(abs2, stein_matrix .+ eye))
+
     sim_tensor = reshape_langevin_samples(result, dataset)
     comparison_plot = timed("Generating PDF comparison figure", verbose) do
         save_comparison_figure(result, sim_tensor, dataset.data, langevin_cfg,
                                joinpath(run_dir, "comparison.png");
                                offsets=lag_offsets,
-                               value_bounds=value_bounds)
+                               value_bounds=value_bounds,
+                               stein_matrix=stein_matrix,
+                               stein_distance=stein_distance)
     end
-
-    mm_metadata = phi_enabled && mm_result !== nothing ? Dict(
-        "samples_used" => mm_result.samples,
-        "dt" => mm_cfg.dt,
-        "max_samples" => mm_cfg.max_samples,
-        "stride" => mm_cfg.stride,
-        "batch_size" => mm_cfg.batch_size,
-        "min_eig" => mm_cfg.min_eig,
-        "moment_matching_path" => mm_path,
-        "moment_matching_dataset" => hr_data_path,
-    ) : nothing
-    corr_metadata = Dict(
-        "decorrelation_time" => corr_info.decorrelation_time,
-        "time_window" => corr_info.time[end],
-        "stride" => corr_cfg.stride,
-        "max_lag" => corr_cfg.max_lag,
-        "threshold" => corr_cfg.threshold,
-        "correlation_dataset" => hr_data_path,
-    )
 
     config_path = timed("Writing run metadata", verbose) do
         save_run_metadata(run_dir, params, history, kl_epochs, kl_history, result;
@@ -693,8 +645,7 @@ function main()
                           comparison_plot=comparison_plot,
                           model_repo_path=model_repo_path,
                           run_model_path=run_model_path,
-                          moment_matching=mm_metadata,
-                          correlation_metadata=corr_metadata)
+                          stein_distance=stein_distance)
     end
 
     @printf("KL divergence: %.6e\n", result.kl_divergence)

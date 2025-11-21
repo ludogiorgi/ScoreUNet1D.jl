@@ -50,18 +50,8 @@ layout `(length, channels, batch)`.
 """
 function periodic_pad(x, left::Integer, right::Integer)
     (left == 0 && right == 0) && return x
-    w = size(x, 1)
-    left > 0 && @assert left <= w "Periodic padding larger than spatial extent is not supported"
-    right > 0 && @assert right <= w "Periodic padding larger than spatial extent is not supported"
-    if left > 0 && right > 0
-        return cat(@view(x[w-left+1:w, :, :]), x, @view(x[1:right, :, :]); dims=1)
-    elseif left > 0
-        return cat(@view(x[w-left+1:w, :, :]), x; dims=1)
-    elseif right > 0
-        return cat(x, @view(x[1:right, :, :]); dims=1)
-    else
-        return x
-    end
+    padding = ((left, right), (0, 0), (0, 0))
+    return NNlib.pad_circular(x, padding)
 end
 
 """

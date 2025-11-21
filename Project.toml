@@ -5,6 +5,7 @@ version = "0.1.0"
 
 [deps]
 BSON = "fbb218c0-5317-5bc6-957e-2ee96dd4b1f0"
+CUDA = "052768ef-5323-5732-b1bb-66c8b64840ba"
 CairoMakie = "13f3f980-e62b-5c42-98c6-ff1f3baf88f0"
 Dates = "ade2ca70-3891-5945-98fb-dc099432e06a"
 DifferentialEquations = "0c46a032-eb83-5123-abaf-570d42b7fbaa"
@@ -23,6 +24,12 @@ ProgressMeter = "92933f4c-e287-5a05-a399-4b506db050ca"
 Random = "9a3f8284-a2c9-5f02-9a11-845980a1fd5c"
 Statistics = "10745b16-79ce-11e8-11f9-7d13ad32a3b2"
 StatsBase = "2913bbd2-ae8a-5f71-8c99-4fb6c76f3a91"
+cuDNN = "02a925ec-e4fe-4b08-9a7e-0d78e3d38ccd"
+
+[compat]
+CUDA = "5"
+FastSDE = "0.1.0"
+cuDNN = "1.4.6"
 
 [extras]
 Test = "8dfed614-e22c-5e08-85e1-65c5234f0b40"

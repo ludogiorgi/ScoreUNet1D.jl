@@ -70,7 +70,7 @@ function DownBlock(in_ch::Integer, out_ch::Integer;
                    kernel::Integer=3, periodic::Bool=false,
                    activation::Function=Flux.gelu)
     conv = ConvBlock(in_ch, out_ch; kernel=kernel, periodic=periodic, activation=activation)
-    down = make_conv1d(out_ch, out_ch; kernel=2, stride=2, periodic=periodic, activation=identity)
+    down = make_conv1d(out_ch, out_ch; kernel=2, stride=2, periodic=periodic, activation=identity, pad=0)
     return DownBlock(conv, down)
 end
 

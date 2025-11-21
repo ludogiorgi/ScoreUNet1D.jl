@@ -16,6 +16,7 @@ include("architecture/PeriodicConv.jl")
 include("architecture/Blocks.jl")
 include("architecture/UNet1D.jl")
 include("data/DataPipeline.jl")
+include("Device.jl")
 include("training/Trainer.jl")
 include("evaluation/MomentMatching.jl")
 include("evaluation/Langevin.jl")
@@ -26,6 +27,8 @@ export ScoreUNetConfig, ScoreUNet, build_unet, PeriodicConv1D,
        MomentMatchingConfig, DriftDiffusionEstimate,
        CorrelationConfig, CorrelationInfo,
        compute_drift_diffusion, compute_correlation_info, average_mode_acf,
-        LangevinConfig, LangevinResult, run_langevin, compare_pdfs, relative_entropy
+       ExecutionDevice, CPUDevice, GPUDevice, select_device, move_model, move_array, is_gpu,
+       gpu_count, activate_device!,
+        LangevinConfig, LangevinResult, run_langevin, compute_stein_matrix, compare_pdfs, relative_entropy
 
 end # module
