@@ -3,9 +3,12 @@ using LinearAlgebra
 using Random
 using StatsBase
 using KernelDensity
+using Base.Threads
+using Dates
 
 Base.@kwdef mutable struct LangevinConfig
-    dt::Float64 = 1e-2
+    dt::Float64 = 1e-2              # integrator step
+    sample_dt::Float64 = 1e-1       # physical time between stored snapshots
     nsteps::Int = 50_000
     resolution::Int = 10
     n_ensembles::Int = 64
@@ -27,8 +30,58 @@ struct LangevinResult
     kl_divergence::Float64
     simulated_acf::Union{Nothing,Vector{Float64}}
     observed_acf::Union{Nothing,Vector{Float64}}
-    acf_time::Union{Nothing,Vector{Float64}}
+    simulated_time::Union{Nothing,Vector{Float64}}
+    observed_time::Union{Nothing,Vector{Float64}}
     decorrelation_time::Union{Nothing,Float64}
+end
+
+struct DriftWorkspace
+    tensor::Array{Float32,3}
+    flat::Vector{Float32}
+    score::Vector{Float64}
+    drift::Union{Nothing,Vector{Float64}}
+end
+
+function DriftWorkspace(L::Int, C::Int, dim::Int, need_drift::Bool)
+    tensor = Array{Float32}(undef, L, C, 1)
+    flat = reshape(tensor, :)
+    score = zeros(Float64, dim)
+    drift = need_drift ? zeros(Float64, dim) : nothing
+    return DriftWorkspace(tensor, flat, score, drift)
+end
+
+function create_langevin_drift(model, sigma::Real, phi::Union{Nothing,Matrix{Float64}},
+                               L::Int, C::Int, dim::Int)
+    workspaces = [DriftWorkspace(L, C, dim, phi !== nothing) for _ in 1:nthreads()]
+    function drift_single!(du, u, _, _)
+        ws = workspaces[threadid()]
+        @inbounds @simd for i in 1:dim
+            ws.flat[i] = Float32(u[i])
+        end
+        scores = score_from_model(model, ws.tensor, sigma)
+        score_vec = reshape(scores, dim)
+        @inbounds @simd for i in 1:dim
+            ws.score[i] = Float64(score_vec[i])
+        end
+        if phi === nothing
+            copyto!(du, ws.score)
+        else
+            tmp = ws.drift::Vector{Float64}
+            mul!(tmp, phi, ws.score)
+            copyto!(du, tmp)
+        end
+        return nothing
+    end
+    drift_single!(du, u, t) = drift_single!(du, u, nothing, t)
+    return drift_single!
+end
+
+function make_diffusion(sigma_matrix::Union{Nothing,Matrix{Float64}})
+    if sigma_matrix === nothing
+        return sqrt(2.0)
+    else
+        return sqrt(2.0) .* sigma_matrix
+    end
 end
 
 """
@@ -43,68 +96,41 @@ function run_langevin(model, dataset::NormalizedDataset, cfg::LangevinConfig,
     C = num_channels(dataset)
     dim = L * C
     n_ens = max(cfg.n_ensembles, 1)
-    rng = MersenneTwister(cfg.seed)
     phi = cfg.phi
     sigma_matrix = cfg.diffusion
-    tensor_buf = Array{Float32}(undef, L, C, 1)
-    tensor_flat = reshape(tensor_buf, :)
-    score64 = zeros(Float64, dim)
-    drift_out = zeros(Float64, dim)
+    diffusion_arg = make_diffusion(sigma_matrix)
+    dt = Float64(cfg.dt)
 
-    function compute_drift!(du, u)
-        @inbounds for i in 1:dim
-            tensor_flat[i] = Float32(u[i])
-        end
-        scores = score_from_model(model, tensor_buf, cfg.sigma)
-        score_vec32 = reshape(scores, dim)
-        @inbounds for i in 1:dim
-            score64[i] = Float64(score_vec32[i])
-        end
-        if phi === nothing
-            @inbounds @simd for i in 1:dim
-                du[i] = score64[i]
-            end
-        else
-            mul!(drift_out, phi, score64)
-            @inbounds @simd for i in 1:dim
-                du[i] = drift_out[i]
-            end
-        end
-        return nothing
-    end
-    drift_single!(du, u, p, t) = compute_drift!(du, u)
-    drift_single!(du, u, t) = compute_drift!(du, u)
+    drift_single! = create_langevin_drift(model, cfg.sigma, phi, L, C, dim)
 
-    diffusion_arg = sigma_matrix === nothing ? sqrt(2.0) :
-        (sqrt(2.0) .* sigma_matrix)
-
-    function integrate_once(seed::Int, u0::Vector{Float64})
-        FastSDE.evolve(u0, cfg.dt, cfg.nsteps, drift_single!, diffusion_arg;
-                       resolution=cfg.resolution,
-                       seed=seed,
-                       timestepper=:euler,
-                       boundary=cfg.boundary)
-    end
-
-    initial_idx = rand(rng, 1:length(dataset))
-    init_sample = Array(dataset.data[:, :, initial_idx:initial_idx])
-    u0 = Float64.(vec(init_sample))
-    traj_sample = integrate_once(rand(rng, 1:typemax(Int)), u0)
-    saves = size(traj_sample, 2)
-    traj = Array{Float32}(undef, dim, saves, n_ens)
-    traj[:, :, 1] .= Float32.(traj_sample)
-
-    for ens in 2:n_ens
-        idx = rand(rng, 1:length(dataset))
+    trajectories = Vector{Matrix{Float64}}(undef, n_ens)
+    Threads.@threads for ens in 1:n_ens
+        tid = threadid()
+        local_rng = MersenneTwister(cfg.seed + 10_000 * tid + ens)
+        idx = rand(local_rng, 1:length(dataset))
         sample = Array(dataset.data[:, :, idx:idx])
-        u0 = Float64.(vec(sample))
-        seed = rand(rng, 1:typemax(Int))
-        traj_single = integrate_once(seed, u0)
-        traj[:, :, ens] .= Float32.(traj_single)
+        u0 = Float64.(reshape(sample, dim))
+        seed = rand(local_rng, 1:typemax(Int))
+        traj = FastSDE.evolve(u0, dt, cfg.nsteps, drift_single!, diffusion_arg;
+                              resolution=cfg.resolution,
+                              seed=seed,
+                              timestepper=:euler,
+                              boundary=cfg.boundary,
+                              flatten=true,
+                              manage_blas_threads=true)
+        trajectories[ens] = Array(traj)
     end
 
-    burn_saved = min(size(traj, 2) - 1, fld(cfg.burn_in, cfg.resolution) + 1)
-    post_burn = traj[:, burn_saved+1:end, :]
+    snapshots_per_traj = div(cfg.nsteps, cfg.resolution) + 1
+    drop_cols = min(snapshots_per_traj, fld(cfg.burn_in, cfg.resolution) + 1)
+    keep_cols = snapshots_per_traj - drop_cols
+    keep_cols > 0 || error("Burn-in removes all Langevin samples. Increase nsteps or reduce burn_in.")
+    traj = Array{Float32}(undef, dim, keep_cols, n_ens)
+    for (ens, mat) in enumerate(trajectories)
+        start_idx = drop_cols + 1
+        traj[:, :, ens] .= Float32.(mat[:, start_idx:end])
+    end
+    post_burn = traj
     flattened = reshape(post_burn, dim, :)
     observed = reshape(dataset.data, dim, :)
 
@@ -123,24 +149,40 @@ function run_langevin(model, dataset::NormalizedDataset, cfg::LangevinConfig,
                                                                nbins=cfg.nbins,
                                                                bounds=(obs_min, obs_max))
     kl = relative_entropy(obs_raw, sim_raw)
+    log_kl_history(kl, cfg)
 
     sim_acf = nothing
     obs_acf = nothing
-    acf_time = nothing
+    sim_time = nothing
+    obs_time = nothing
     decor_time = nothing
     if corr_info !== nothing
-        sim_matrix = reshape(Float32.(flattened), dim, :)
-        available_lag = min(corr_info.plot_lag, size(sim_matrix, 2) - 1)
-        if available_lag >= 0
-            sim_acf = average_mode_acf(sim_matrix, available_lag)
-            obs_acf = corr_info.observed[1:available_lag + 1]
-            acf_time = corr_info.time[1:available_lag + 1]
-        end
+        obs_steps = min(corr_info.plot_lag, length(corr_info.observed) - 1)
+        obs_steps = max(obs_steps, 0)
+        obs_acf = corr_info.observed[1:obs_steps + 1]
+        obs_time = corr_info.time[1:obs_steps + 1]
+        target_time = obs_time[end]
+        sim_dt = cfg.dt * cfg.resolution
+        max_sim_steps = max(size(flattened, 2) - 1, 0)
+        sim_steps = clamp(floor(Int, target_time / sim_dt), 0, max_sim_steps)
+        sim_series = view(flattened, :, 1:sim_steps + 1)
+        sim_acf = average_mode_acf(sim_series, sim_steps)
+        sim_time = (0:sim_steps) .* sim_dt
         decor_time = corr_info.decorrelation_time
     end
 
     return LangevinResult(Float32.(post_burn), centers, sim_pdf, obs_pdf, kl,
-                          sim_acf, obs_acf, acf_time, decor_time)
+                          sim_acf, obs_acf, sim_time, obs_time, decor_time)
+end
+
+function log_kl_history(kl::Real, cfg::LangevinConfig)
+    runs_dir = normpath(joinpath(@__DIR__, "..", "..", "runs"))
+    mkpath(runs_dir)
+    history_path = joinpath(runs_dir, "kl_history.csv")
+    timestamp = Dates.format(Dates.now(), dateformat"yyyy-mm-ddTHH:MM:SS")
+    open(history_path, "a") do io
+        println(io, "$timestamp,$(Float64(kl)),$(cfg.n_ensembles),$(cfg.nsteps),$(cfg.resolution)")
+    end
 end
 
 function finite_minimum(values)

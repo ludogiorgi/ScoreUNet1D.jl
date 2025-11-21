@@ -30,12 +30,64 @@ struct CorrelationInfo
     time::Vector{Float64}
     decorrelation_time::Float64
     plot_lag::Int
+    dt::Float64
+end
+
+"""
+    correct_discrete_time_bias(Φ, acf_lag1, dt; verbose=false)
+
+Corrects the drift matrix Φ for discrete-time bias in finite-difference estimation.
+
+When estimating Φ from discrete-time data using finite differences, the resulting
+estimate is systematically biased, especially when dynamics are fast relative to
+the timestep. This function applies an empirical correction based on the observed
+autocorrelation at lag 1.
+
+The correction factor is: -log(ρ) / (ρ - 1), where ρ = ACF(dt).
+This accounts for the difference between discrete-time transitions and
+continuous-time derivatives.
+"""
+function correct_discrete_time_bias(Φ::Matrix{Float64},
+                                    acf_lag1::Float64,
+                                    dt::Float64;
+                                    verbose::Bool=false)
+    # Ensure ACF is in valid range
+    ρ = clamp(acf_lag1, 1e-6, 1.0 - 1e-6)
+
+    # Correction factor: log(ρ) / (ρ - 1)
+    # For ρ → 1 (slow dynamics): factor → 1 (no correction needed)
+    # For ρ → 0 (fast dynamics): factor → +∞ (large correction needed)
+    # For ρ = 0.5: factor = log(0.5) / (0.5 - 1) = -0.693 / -0.5 ≈ 1.386
+    correction_factor = log(ρ) / (ρ - 1.0)
+
+    if verbose
+        @info "Discrete-time bias correction" acf_lag1=ρ correction_factor=correction_factor
+    end
+
+    # Decompose into symmetric and antisymmetric parts
+    S = (Φ + transpose(Φ)) / 2
+    A = (Φ - transpose(Φ)) / 2
+
+    # Apply correction to symmetric part (conservative dynamics)
+    # The symmetric part relates to diffusion and relaxation timescales
+    S_corrected = S * correction_factor
+
+    # Antisymmetric part (circulatory dynamics) represents divergence-free flow
+    # For now, apply the same correction, as it also affects timescales
+    A_corrected = A * correction_factor
+
+    Φ_corrected = S_corrected + A_corrected
+
+    return Φ_corrected
 end
 
 function compute_drift_diffusion(model,
                                  dataset::NormalizedDataset,
                                  trainer_cfg::ScoreTrainerConfig,
-                                 cfg::MomentMatchingConfig)
+                                 cfg::MomentMatchingConfig,
+                                 corr_info::Union{Nothing,CorrelationInfo}=nothing;
+                                 apply_correction::Bool=true,
+                                 verbose::Bool=false)
     L = sample_length(dataset)
     C = num_channels(dataset)
     total_steps = size(dataset.data, 3)
@@ -79,6 +131,15 @@ function compute_drift_diffusion(model,
     M ./= processed
     V ./= processed
     Φ = M * pinv(transpose(V); rtol=1e-8)
+
+    # Apply discrete-time bias correction if ACF data is available
+    if apply_correction && corr_info !== nothing && length(corr_info.observed) >= 2
+        acf_lag1 = corr_info.observed[2]  # Index 1 is lag 0, index 2 is lag 1
+        Φ = correct_discrete_time_bias(Φ, acf_lag1, cfg.dt; verbose=verbose)
+    elseif apply_correction && corr_info !== nothing
+        @warn "Insufficient ACF data for bias correction; using uncorrected Φ"
+    end
+
     S = (Φ + transpose(Φ)) ./ 2
     evals, evecs = eigen(Symmetric(S))
     min_eig = max(cfg.min_eig, 0.0)
@@ -140,5 +201,5 @@ function compute_correlation_info(dataset::NormalizedDataset,
     plot_lag = clamp(ceil(Int, target_time / cfg.dt), 1, max_lag)
     time_axis = (0:plot_lag) .* cfg.dt
     observed = acf_full[1:plot_lag + 1]
-    return CorrelationInfo(observed, time_axis, decor_time, plot_lag)
+    return CorrelationInfo(observed, time_axis, decor_time, plot_lag, cfg.dt)
 end

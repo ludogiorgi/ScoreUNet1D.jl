@@ -137,14 +137,20 @@ function build_trainer_config(params::Dict{String,Any})
     return cfg
 end
 
-function build_langevin_config(params::Dict{String,Any}, trainer_cfg::ScoreTrainerConfig)
+function build_langevin_config(params::Dict{String,Any}, trainer_cfg::ScoreTrainerConfig, data_dt::Float64)
     boundary_val = get(params, "boundary", [-10.0, 10.0])
     boundary_tuple = boundary_val === nothing ? nothing :
         (Float64(boundary_val[1]), Float64(boundary_val[2]))
+    resolution_val = Int(get(params, "resolution", 10))
+    sample_dt_param = Float64(get(params, "sample_dt", get(params, "dt", data_dt)))
+    resolution_val <= 0 && error("resolution must be positive")
+    sample_dt_param <= 0 && error("sample_dt must be positive")
+    integrator_dt = sample_dt_param / resolution_val
     cfg = LangevinConfig(
-        dt = Float64(get(params, "dt", 1e-2)),
+        dt = integrator_dt,
+        sample_dt = sample_dt_param,
         nsteps = Int(get(params, "nsteps", 50_000)),
-        resolution = Int(get(params, "resolution", 10)),
+        resolution = resolution_val,
         n_ensembles = Int(get(params, "n_ensembles", 64)),
         burn_in = Int(get(params, "burn_in", 5_000)),
         nbins = Int(get(params, "nbins", 128)),
@@ -401,14 +407,25 @@ function save_comparison_figure(result::LangevinResult,
                     xlabel="Time",
                     ylabel="Average ACF",
                     title=@sprintf("Autocorrelation (τ_dec≈%.2f)", something(result.decorrelation_time, 0.0)))
-    if result.observed_acf !== nothing && result.acf_time !== nothing
-        lines!(acf_axis, result.acf_time, result.observed_acf;
+    obs_time = result.observed_time
+    sim_time = result.simulated_time
+    if result.observed_acf !== nothing && obs_time !== nothing
+        lines!(acf_axis, obs_time, result.observed_acf;
                color=:navy, linewidth=2.0, label="Observed ACF")
     end
-    if result.simulated_acf !== nothing && result.acf_time !== nothing
-        lines!(acf_axis, result.acf_time, result.simulated_acf;
+    if result.simulated_acf !== nothing && sim_time !== nothing
+        lines!(acf_axis, sim_time, result.simulated_acf;
                color=:firebrick, linewidth=2.0, label="Langevin ACF")
     end
+    limit_time = nothing
+    if obs_time !== nothing && sim_time !== nothing
+        limit_time = min(obs_time[end], sim_time[end])
+    elseif obs_time !== nothing
+        limit_time = obs_time[end]
+    elseif sim_time !== nothing
+        limit_time = sim_time[end]
+    end
+    limit_time !== nothing && xlims!(acf_axis, 0, limit_time)
     axislegend(acf_axis, position=:rt)
 
     for (row, spec) in enumerate(specs)
@@ -442,14 +459,16 @@ function copy_parameters_file(run_dir::AbstractString, params_path::AbstractStri
 end
 
 function run_training_and_monitor!(model,
-                                   dataset::NormalizedDataset,
+                                   pdf_dataset::NormalizedDataset,
                                    train_data::NormalizedDataset,
                                    trainer_cfg::ScoreTrainerConfig,
                                    langevin_cfg::LangevinConfig,
                                    mm_cfg::MomentMatchingConfig,
                                    corr_info::CorrelationInfo,
                                    eval_interval::Int,
-                                   verbose::Bool)
+                                   verbose::Bool,
+                                   mm_dataset::NormalizedDataset,
+                                   phi_enabled::Bool)
     interval = max(eval_interval, 0)
     kl_epochs = Int[]
     kl_values = Float64[]
@@ -457,18 +476,25 @@ function run_training_and_monitor!(model,
     last_mm = Ref{Union{Nothing,DriftDiffusionEstimate}}(nothing)
 
     function evaluate!(epoch, current_model, label_suffix)
-        mm = timed("Moment matching ($label_suffix)", verbose) do
-            compute_drift_diffusion(current_model, dataset, trainer_cfg, mm_cfg)
+        if phi_enabled
+            mm = timed("Moment matching ($label_suffix)", verbose) do
+                compute_drift_diffusion(current_model, mm_dataset, trainer_cfg, mm_cfg, corr_info;
+                                        apply_correction=true, verbose=verbose)
+            end
+            langevin_cfg.phi = mm.phi
+            langevin_cfg.diffusion = mm.sigma
+            last_mm[] = mm
+        else
+            langevin_cfg.phi = nothing
+            langevin_cfg.diffusion = nothing
+            last_mm[] = nothing
         end
-        langevin_cfg.phi = mm.phi
-        langevin_cfg.diffusion = mm.sigma
         res = timed("Langevin integration ($label_suffix)", verbose) do
-            run_langevin(current_model, dataset, langevin_cfg, corr_info)
+            run_langevin(current_model, pdf_dataset, langevin_cfg, corr_info)
         end
         push!(kl_epochs, epoch)
         push!(kl_values, res.kl_divergence)
         last_result[] = res
-        last_mm[] = mm
         @info "Epoch $(epoch) KL divergence" value=res.kl_divergence
     end
 
@@ -517,6 +543,8 @@ function main()
     raw_min = Float64(minimum(dataset.data))
     raw_max = Float64(maximum(dataset.data))
     value_bounds = ensure_bounds((raw_min, raw_max))
+    hr_dataset = dataset
+    hr_data_path = data_path
 
     train_data = timed("Preparing training subset", verbose) do
         subset_dataset(dataset, train_samples; seed=subset_seed)
@@ -525,10 +553,11 @@ function main()
 
     model_cfg, model_seed = build_model_config(model_params)
     trainer_cfg = build_trainer_config(training_params)
-    langevin_cfg = build_langevin_config(langevin_params, trainer_cfg)
+    langevin_cfg = build_langevin_config(langevin_params, trainer_cfg, data_dt)
     output_cfg = build_output_config(output_params)
     eval_interval = Int(get(training_params, "langevin_eval_interval", 1))
     mm_params = get(params, "moment_matching", Dict{String,Any}())
+    phi_enabled = get(mm_params, "phi", true)
     mm_cfg = MomentMatchingConfig(
         dt = Float64(get(mm_params, "dt", data_dt)),
         max_samples = Int(get(mm_params, "max_samples", 4096)),
@@ -576,11 +605,17 @@ function main()
     mm_result = nothing
 
     if model_exists
-        mm_result = timed("Moment matching (pretrained model)", verbose) do
-            compute_drift_diffusion(model, dataset, trainer_cfg, mm_cfg)
+        if phi_enabled
+            mm_result = timed("Moment matching (pretrained model)", verbose) do
+                compute_drift_diffusion(model, hr_dataset, trainer_cfg, mm_cfg, corr_info;
+                                        apply_correction=true, verbose=verbose)
+            end
+            langevin_cfg.phi = mm_result.phi
+            langevin_cfg.diffusion = mm_result.sigma
+        else
+            langevin_cfg.phi = nothing
+            langevin_cfg.diffusion = nothing
         end
-        langevin_cfg.phi = mm_result.phi
-        langevin_cfg.diffusion = mm_result.sigma
         result = timed("Langevin integration (pretrained model)", verbose) do
             run_langevin(model, dataset, langevin_cfg, corr_info)
         end
@@ -588,21 +623,26 @@ function main()
         training_performed = true
         history, kl_epochs, kl_history, result, mm_result = run_training_and_monitor!(
             model, dataset, train_data, trainer_cfg, langevin_cfg,
-            mm_cfg, corr_info, eval_interval, verbose)
+            mm_cfg, corr_info, eval_interval, verbose, dataset, phi_enabled)
         timed("Saving reusable model checkpoint", verbose) do
             save_model(model_repo_path, model, model_cfg)
         end
     end
 
-    mm_result === nothing && error("Moment matching estimation missing")
+    if phi_enabled && mm_result === nothing
+        error("Moment matching estimation missing")
+    end
 
     run_model_path = joinpath(run_dir, run_model_filename)
     timed("Saving run-specific model checkpoint", verbose) do
         save_model(run_model_path, model, model_cfg)
     end
-    mm_path = joinpath(run_dir, "moment_matching.bson")
-    timed("Saving moment matching matrices", verbose) do
-        BSON.@save mm_path phi=mm_result.phi sigma=mm_result.sigma samples=mm_result.samples
+    mm_path = nothing
+    if phi_enabled && mm_result !== nothing
+        mm_path = joinpath(run_dir, "moment_matching.bson")
+        timed("Saving moment matching matrices", verbose) do
+            BSON.@save mm_path phi=mm_result.phi sigma=mm_result.sigma samples=mm_result.samples
+        end
     end
 
     training_plot = nothing
@@ -621,7 +661,7 @@ function main()
                                value_bounds=value_bounds)
     end
 
-    mm_metadata = Dict(
+    mm_metadata = phi_enabled && mm_result !== nothing ? Dict(
         "samples_used" => mm_result.samples,
         "dt" => mm_cfg.dt,
         "max_samples" => mm_cfg.max_samples,
@@ -629,13 +669,15 @@ function main()
         "batch_size" => mm_cfg.batch_size,
         "min_eig" => mm_cfg.min_eig,
         "moment_matching_path" => mm_path,
-    )
+        "moment_matching_dataset" => hr_data_path,
+    ) : nothing
     corr_metadata = Dict(
         "decorrelation_time" => corr_info.decorrelation_time,
         "time_window" => corr_info.time[end],
         "stride" => corr_cfg.stride,
         "max_lag" => corr_cfg.max_lag,
         "threshold" => corr_cfg.threshold,
+        "correlation_dataset" => hr_data_path,
     )
 
     config_path = timed("Writing run metadata", verbose) do

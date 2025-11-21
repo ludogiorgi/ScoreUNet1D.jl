@@ -34,6 +34,7 @@ stride = 1
 batch_size = 256
 min_eig = 1e-6
 seed = 0
+phi = true
 
 [correlation]
 dt = 1.0
@@ -46,7 +47,7 @@ multiple = 5.0
 verbose = true
 
 [langevin]
-dt = 0.005
+sample_dt = 1.0
 nsteps = 12000
 resolution = 20
 n_ensembles = 128

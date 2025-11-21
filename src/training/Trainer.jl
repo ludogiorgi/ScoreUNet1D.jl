@@ -82,7 +82,8 @@ Returns the estimated score ∇ log p(x) by rescaling the predicted noise.
 """
 function score_from_model(model, batch, sigma::Real)
     preds = model(batch)
-    return (-1 / sigma) .* preds
+    inv_sigma = -one(eltype(preds)) / sigma
+    return inv_sigma .* preds
 end
 
 function seed_thread_rngs(seed::Int)
