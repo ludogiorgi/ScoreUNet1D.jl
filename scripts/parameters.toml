@@ -1,50 +1,136 @@
+# Configuration for ScoreUNet1D.jl
+
 [data]
+# Path to the HDF5 dataset file
 path = "data/new_ks.hdf5"
+
+# Key in the HDF5 file containing the dataset
 dataset_key = "timeseries"
+
+# Orientation of samples in the dataset ("columns" or "rows")
 samples_orientation = "columns"
-train_samples = 20000
+
+# Number of samples to use for training
+train_samples = 500000
+
+# Seed for random subset selection
 subset_seed = 2025
+
+# Time step of the data
 dt = 1.0
+
+# Stride for sampling the data
 stride = 8
 
 [model]
+# Number of input channels
 in_channels = 1
-base_channels = 24
+
+# Base number of channels for the U-Net
+base_channels = 64
+
+# Multipliers for channels at each level of the U-Net
 channel_multipliers = [1, 2, 4]
+
+# Convolution kernel size
 kernel_size = 5
+
+# Whether to use periodic boundary conditions
 periodic = true
+
+# Activation function to use
 activation = "swish"
+
+# Final activation function
 final_activation = "identity"
+
+# Seed for model initialization
 init_seed = 314159
 
 [training]
-batch_size = 128
-epochs = 2
+# Batch size for training
+batch_size = 1024
+
+# Number of training epochs
+epochs = 20
+
+# Force retraining even if a trained model exists
+force_retrain = true
+
+# Learning rate
 lr = 0.001
+
+# Noise level (sigma) for score matching
 sigma = 0.05
+
+# Whether to shuffle the dataset
 shuffle = true
-progress = false
-max_steps_per_epoch = 50
+
+# Show progress bar during training
+progress = true
+
+# Seed for training randomness
 seed = 42
-langevin_eval_interval = 1
+
+# Interval (in epochs) to run Langevin dynamics evaluation
+langevin_eval_interval = 5
+
+# Number of gradient accumulation steps
+accumulation_steps = 1
+
+# Whether to use a learning rate schedule
+use_lr_schedule = true
+
+# Number of warmup steps for the scheduler
+warmup_steps = 100
+
+# Minimum learning rate factor for the scheduler
+min_lr_factor = 0.1
 
 [run]
+# Enable verbose output
 verbose = true
+
+# Device to run on ("CPU" or "GPU")
 device = "GPU"
 
 [langevin]
-sample_dt = 1.0
-nsteps = 2000
+# Time step for Langevin dynamics sampling
+sample_dt = 0.05
+
+# Number of steps for Langevin dynamics
+nsteps = 100000
+
+# Resolution for spatial discretization (if applicable)
 resolution = 20
-n_ensembles = 128
-burn_in = 500
+
+# Number of ensembles (samples) to generate
+n_ensembles = 64
+
+# Number of burn-in steps to discard
+burn_in = 400
+
+# Number of bins for histograms/PDFs
 nbins = 384
+
+# Seed for Langevin sampling
 seed = 21
+
+# Mode for evaluation ("all" or specific metrics)
 mode = "all"
+
+# Boundary for the domain
 boundary = [-40.0, 40.0]
 
 [output]
+# Root directory for run outputs
 run_root = "runs"
-model_repository_path = "scripts/trained_model.bson"
+
+# Path to store the latest trained model
+model_repository_path = "runs/latest_trained_model.bson"
+
+# Filename for the model in the run directory
 run_model_filename = "model.bson"
+
+# Lag offsets for correlation analysis
 lag_offsets = [1, 2, 3]

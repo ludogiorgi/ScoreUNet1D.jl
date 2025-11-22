@@ -465,8 +465,7 @@ function run_training_and_monitor!(model,
 
     function evaluate!(epoch, current_model, label_suffix)
         res = timed("Langevin integration ($label_suffix)", verbose) do
-            eval_model = device isa GPUDevice ? move_model(current_model, CPUDevice()) : current_model
-            run_langevin(eval_model, pdf_dataset, langevin_cfg, corr_info)
+            run_langevin(current_model, pdf_dataset, langevin_cfg, corr_info; device=device)
         end
         push!(kl_epochs, epoch)
         push!(kl_values, res.kl_divergence)
@@ -494,6 +493,12 @@ function run_training_and_monitor!(model,
 end
 
 function main()
+    # Configure BLAS threading for optimal CPU performance
+    # Set BLAS to single-threaded to avoid contention with Julia's threading
+    # This is critical for CPU-optimized Langevin integration performance
+    BLAS.set_num_threads(1)
+    @info "BLAS threading configured" blas_threads=BLAS.get_num_threads() julia_threads=Threads.nthreads()
+
     params = load_parameters()
     data_params = get(params, "data", Dict{String,Any}())
     model_params = get(params, "model", Dict{String,Any}())
@@ -565,7 +570,9 @@ function main()
     end
 
     model_exists = isfile(model_repo_path)
-    if model_exists
+    force_retrain = get(training_params, "force_retrain", false)
+    
+    if model_exists && !force_retrain
         @info "Loading pretrained model" path=model_repo_path
         model, saved_cfg = load_saved_model(model_repo_path)
         saved_cfg isa ScoreUNetConfig && (model_cfg = saved_cfg)
@@ -580,10 +587,9 @@ function main()
     training_performed = false
     result = nothing
 
-    if model_exists
-        langevin_model = device isa GPUDevice ? move_model(model, CPUDevice()) : model
+    if model_exists && !force_retrain
         result = timed("Langevin integration (pretrained model)", verbose) do
-            run_langevin(langevin_model, dataset, langevin_cfg, corr_info)
+            run_langevin(model, dataset, langevin_cfg, corr_info; device=device)
         end
     else
         training_performed = true

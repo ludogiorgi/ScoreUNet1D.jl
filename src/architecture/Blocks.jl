@@ -1,4 +1,5 @@
 using Flux
+using NNlib
 
 """
     same_padding(kernel, dilation)
@@ -86,7 +87,7 @@ struct Upsample1D
     factor::Int
 end
 
-(layer::Upsample1D)(x) = repeat(x, inner=(layer.factor, 1, 1))
+(layer::Upsample1D)(x) = NNlib.upsample_nearest(x, (layer.factor,))
 
 """
     UpBlock

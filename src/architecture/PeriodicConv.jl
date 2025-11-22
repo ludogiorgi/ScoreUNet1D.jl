@@ -1,4 +1,5 @@
 using Flux
+using NNlib
 
 """
     PeriodicConv1D(conv::Flux.Conv, pad_left::Integer, pad_right::Integer)
