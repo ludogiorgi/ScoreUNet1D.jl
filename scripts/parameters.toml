@@ -99,13 +99,13 @@ device = "GPU"
 sample_dt = 0.05
 
 # Number of steps for Langevin dynamics
-nsteps = 100000
+nsteps = 10000
 
 # Resolution for spatial discretization (if applicable)
 resolution = 20
 
 # Number of ensembles (samples) to generate
-n_ensembles = 64
+n_ensembles = 256
 
 # Number of burn-in steps to discard
 burn_in = 400

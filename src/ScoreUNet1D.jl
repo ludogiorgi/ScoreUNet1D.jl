@@ -10,7 +10,6 @@ using LinearAlgebra
 using HDF5
 using StatsBase
 using ProgressMeter
-using FastSDE
 
 include("architecture/PeriodicConv.jl")
 include("architecture/Blocks.jl")
@@ -18,6 +17,8 @@ include("architecture/UNet1D.jl")
 include("data/DataPipeline.jl")
 include("Device.jl")
 include("training/Trainer.jl")
+include("EnsembleIntegrator.jl")
+using .EnsembleIntegrator
 include("evaluation/Langevin.jl")
 
 export ScoreUNetConfig, ScoreUNet, build_unet, PeriodicConv1D,
@@ -27,6 +28,7 @@ export ScoreUNetConfig, ScoreUNet, build_unet, PeriodicConv1D,
        average_mode_acf,
        ExecutionDevice, CPUDevice, GPUDevice, select_device, move_model, move_array, is_gpu,
        gpu_count, activate_device!,
-        LangevinConfig, LangevinResult, run_langevin, compute_stein_matrix, compare_pdfs, relative_entropy
+       LangevinConfig, LangevinResult, run_langevin, compute_stein_matrix, compare_pdfs, relative_entropy,
+       evolve_sde
 
 end # module
