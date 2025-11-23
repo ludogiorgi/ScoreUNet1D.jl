@@ -8,11 +8,11 @@ using Flux
 export evolve_sde
 
 # --- 1. Memory Cache for Zero-Allocation Steps ---
-struct IntegratorCache{M}
-    drift_out::M    # Stores output of s(x)
-    drift_term::M   # Stores Phi * s(x)
-    noise::M        # Stores Gaussian noise
-    diff_term::M    # Stores Sigma * noise
+struct IntegratorCache{M1, M2}
+    drift_out::M1    # Stores output of s(x)
+    drift_term::M2   # Stores Phi * s(x)
+    noise::M2        # Stores Gaussian noise
+    diff_term::M2    # Stores Sigma * noise
 end
 
 function setup_cache(x::AbstractMatrix, s_model)
@@ -165,8 +165,9 @@ function evolve_sde(s_model, x0::AbstractMatrix, Phi, Sigma, dt, T; device="cpu"
     # Ensure Sigma is explicitly UpperTriangular for CPU speed optimization
     Sigma_cpu = isa(Sigma, UpperTriangular) ? Sigma : UpperTriangular(Array(Sigma))
     
-    model_cpu = Flux.cpu(s_model)
-    Flux.testmode!(model_cpu) # <--- CRITICAL FIX
+    # Ensure we work on a copy to avoid side effects (e.g. testmode! on training model)
+    model_cpu = deepcopy(Flux.cpu(s_model))
+    Flux.testmode!(model_cpu)
 
     integrate_on_device!(x_curr, model_cpu, Phi_cpu, Sigma_cpu, dt, T)
     return x_curr

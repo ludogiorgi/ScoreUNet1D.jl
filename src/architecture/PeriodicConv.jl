@@ -51,8 +51,18 @@ layout `(length, channels, batch)`.
 """
 function periodic_pad(x, left::Integer, right::Integer)
     (left == 0 && right == 0) && return x
-    padding = ((left, right), (0, 0), (0, 0))
-    return NNlib.pad_circular(x, padding)
+    L = size(x, 1)
+    left = max(left, 0)
+    right = max(right, 0)
+    parts = Tuple{}
+    if left > 0
+        parts = (view(x, L - left + 1:L, :, :),)
+    end
+    parts = (parts..., x)
+    if right > 0
+        parts = (parts..., view(x, 1:right, :, :))
+    end
+    return cat(parts...; dims=1)
 end
 
 """

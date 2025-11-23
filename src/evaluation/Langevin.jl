@@ -148,7 +148,8 @@ end
 
 Integrates the Langevin dynamics `dx = Phi*s(x)dt + sqrt(2)*Sigma*dW` using EnsembleIntegrator
 with Phi=Sigma=Identity, which reduces to the standard form `dx = s(x)dt + sqrt(2)dW`.
-Compares the resulting steady-state PDF with the observed data distribution.
+Uses `cfg.resolution` and `cfg.burn_in` to control how often snapshots are stored and
+how many are discarded as burn-in before estimating the steady-state PDF.
 """
 function run_langevin(model, dataset::NormalizedDataset, cfg::LangevinConfig,
                       corr_info::Union{Nothing,CorrelationInfo}=nothing;
@@ -163,6 +164,29 @@ function run_langevin(model, dataset::NormalizedDataset, cfg::LangevinConfig,
     Phi = Matrix{Float64}(I, dim, dim)
     Sigma = Matrix{Float64}(I, dim, dim)
 
+    # Derive integration schedule from config
+    dt = cfg.dt
+    total_steps = max(cfg.nsteps, 1)
+    steps_per_snapshot = max(cfg.resolution, 1)
+    burn_in_steps = max(cfg.burn_in, 0)
+
+    total_snapshots = fld(total_steps, steps_per_snapshot)
+    total_snapshots > 0 || error("resolution too large or nsteps too small to produce any Langevin snapshots")
+
+    burn_in_snapshots = fld(burn_in_steps, steps_per_snapshot)
+    keep_snapshots = max(total_snapshots - burn_in_snapshots, 0)
+    keep_snapshots > 0 || error("Burn-in removes all Langevin samples. Increase nsteps or reduce burn_in/resolution.")
+
+    # Prefer cfg.sample_dt if it matches dt * resolution, otherwise fall back to that product.
+    segment_time = dt * steps_per_snapshot
+    if cfg.sample_dt > 0
+        # Only warn if there's a significant mismatch; keep dt/resolution authoritative
+        rel_err = abs(cfg.sample_dt - segment_time) / max(segment_time, eps(Float64))
+        rel_err > 1e-6 && @warn "LangevinConfig.sample_dt is inconsistent with dt * resolution; using dt * resolution" dt cfg_sample_dt=cfg.sample_dt resolution=steps_per_snapshot
+    end
+
+    total_time = segment_time * total_snapshots
+
     # Determine device string for evolve_sde
     device_str = is_gpu(device) ? "gpu" : "cpu"
 
@@ -170,6 +194,9 @@ function run_langevin(model, dataset::NormalizedDataset, cfg::LangevinConfig,
     # Ensure model is on CPU initially for the wrapper, EnsembleIntegrator handles moving to GPU
     cpu_model = Flux.cpu(model)
     wrapper = ScoreWrapper(cpu_model, cfg.sigma, L, C, dim)
+
+    # Seed RNG for reproducible ensemble initialization
+    Random.seed!(cfg.seed)
 
     # Sample initial conditions
     # We need a (dim, n_ens) matrix
@@ -180,21 +207,22 @@ function run_langevin(model, dataset::NormalizedDataset, cfg::LangevinConfig,
         x0[:, i] = reshape(dataset.data[:, :, idx], dim)
     end
 
-    # Total integration time
-    total_time = cfg.dt * cfg.nsteps
+    @info "Running $(n_ens) ensembles using EnsembleIntegrator" device=device_str dt=dt nsteps=total_steps resolution=steps_per_snapshot burn_in=burn_in_steps snapshots=keep_snapshots total_time=total_time
 
-    @info "Running $(n_ens) ensembles using EnsembleIntegrator" device=device_str dt=cfg.dt nsteps=cfg.nsteps
+    # Integrate using evolve_sde in segments, storing snapshots every `steps_per_snapshot`
+    traj = Array{Float32}(undef, dim, keep_snapshots, n_ens)
+    x_curr = x0
+    snapshot_idx = 0
+    for step_block in 1:total_snapshots
+        # Advance by one snapshot interval
+        x_curr = evolve_sde(wrapper, x_curr, Phi, Sigma, dt, segment_time; device=device_str)
+        if step_block > burn_in_snapshots
+            snapshot_idx += 1
+            traj[:, snapshot_idx, :] .= Float32.(x_curr)
+        end
+    end
 
-    # Integrate using evolve_sde (Batch mode)
-    x_final = evolve_sde(wrapper, x0, Phi, Sigma, cfg.dt, total_time; device=device_str)
-
-    # Post-processing (simplified version - full implementation would need trajectory storage)
-    snapshots_per_traj = 1  # We only have final states currently
-    traj = Array{Float32}(undef, dim, snapshots_per_traj, n_ens)
-    traj[:, 1, :] .= Float32.(x_final)
-
-    post_burn = traj
-    flattened = reshape(post_burn, dim, :)
+    flattened = reshape(traj, dim, :)
     observed = reshape(dataset.data, dim, :)
 
     sim_modes = select_modes(flattened, L, C, cfg.mode)
@@ -223,7 +251,7 @@ function run_langevin(model, dataset::NormalizedDataset, cfg::LangevinConfig,
     obs_time = nothing
     decor_time = nothing
 
-    return LangevinResult(Float32.(post_burn), centers, sim_pdf, obs_pdf, kl,
+    return LangevinResult(traj, centers, sim_pdf, obs_pdf, kl,
                           sim_acf, obs_acf, sim_time, obs_time, decor_time)
 end
 

@@ -133,6 +133,10 @@ function build_trainer_config(params::Dict{String,Any})
         seed = Int(get(params, "seed", 42)),
         progress = get(params, "progress", true),
         max_steps_per_epoch = max_steps,
+        accumulation_steps = Int(get(params, "accumulation_steps", 1)),
+        use_lr_schedule = get(params, "use_lr_schedule", false),
+        warmup_steps = Int(get(params, "warmup_steps", 500)),
+        min_lr_factor = Float64(get(params, "min_lr_factor", 0.1)),
     )
     return cfg
 end
@@ -142,13 +146,19 @@ function build_langevin_config(params::Dict{String,Any}, trainer_cfg::ScoreTrain
     boundary_tuple = boundary_val === nothing ? nothing :
         (Float64(boundary_val[1]), Float64(boundary_val[2]))
     resolution_val = Int(get(params, "resolution", 10))
-    sample_dt_param = Float64(get(params, "sample_dt", get(params, "dt", data_dt)))
+    
+    # Interpret sample_dt as the integrator step size (dt)
+    integrator_dt = Float64(get(params, "sample_dt", get(params, "dt", data_dt)))
+    
     resolution_val <= 0 && error("resolution must be positive")
-    sample_dt_param <= 0 && error("sample_dt must be positive")
-    integrator_dt = sample_dt_param / resolution_val
+    integrator_dt <= 0 && error("sample_dt must be positive")
+    
+    # sample_dt in LangevinConfig is the saving interval
+    snapshot_dt = integrator_dt * resolution_val
+    
     cfg = LangevinConfig(
         dt = integrator_dt,
-        sample_dt = sample_dt_param,
+        sample_dt = snapshot_dt,
         nsteps = Int(get(params, "nsteps", 50_000)),
         resolution = resolution_val,
         n_ensembles = Int(get(params, "n_ensembles", 64)),

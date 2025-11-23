@@ -38,8 +38,8 @@ end
     @test length(history.epoch_losses) == 1
     @test !isempty(history.batch_losses)
 
-    langevin_cfg = LangevinConfig(dt=1e-2, nsteps=400, resolution=20,
-                                  n_ensembles=2, burn_in=40, nbins=16,
+    langevin_cfg = LangevinConfig(dt=1e-3, nsteps=4000, resolution=200,
+                                  n_ensembles=2, burn_in=400, nbins=16,
                                   sigma=trainer_cfg.sigma, mode=1)
     result = run_langevin(model, dataset, langevin_cfg)
     @test result.kl_divergence ≥ 0

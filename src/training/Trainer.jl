@@ -83,6 +83,16 @@ function train_single_device!(model, dataset::NormalizedDataset, cfg::ScoreTrain
     # Dimensions: (Length, Channels, BatchSize)
     L, C, _ = size(dataset.data)
     batch_cpu_buffer = Array{Float32}(undef, L, C, cfg.batch_size)
+    
+    # Pre-allocate buffers to avoid allocation in loop
+    batch_gpu_buffer = nothing
+    noise_gpu_buffer = nothing
+    noise_cpu_buffer = Array{Float32}(undef, L, C, cfg.batch_size)
+    
+    if device isa GPUDevice
+        batch_gpu_buffer = CUDA.CuArray{Float32}(undef, L, C, cfg.batch_size)
+        noise_gpu_buffer = CUDA.CuArray{Float32}(undef, L, C, cfg.batch_size)
+    end
 
     for epoch in 1:cfg.epochs
         epoch_t0 = time_ns()
@@ -106,8 +116,6 @@ function train_single_device!(model, dataset::NormalizedDataset, cfg::ScoreTrain
             # We use a view of the buffer if the batch is smaller than batch_size (last batch)
             if current_batch_size == cfg.batch_size
                 # Direct copy into buffer
-                # Note: dataset.data is (L, C, N), we copy specific indices
-                # This loop is faster than array slicing which allocates
                 Threads.@threads for b in 1:current_batch_size
                     idx = batch_idxs[b]
                     @inbounds @simd for i in 1:(L*C)
@@ -127,8 +135,33 @@ function train_single_device!(model, dataset::NormalizedDataset, cfg::ScoreTrain
                 batch_cpu = batch_view
             end
 
-            batch = move_array(batch_cpu, device)
-            noise = noise_like(batch, device, thread_rngs)
+            # Prepare batch and noise on device
+            local batch, noise
+            
+            if device isa GPUDevice
+                # GPU Path: Use pre-allocated buffers
+                batch_view_gpu = view(batch_gpu_buffer, :, :, 1:current_batch_size)
+                CUDA.@allowscalar copyto!(batch_view_gpu, batch_cpu)
+                batch = batch_view_gpu
+                
+                noise_view_gpu = view(noise_gpu_buffer, :, :, 1:current_batch_size)
+                CUDA.randn!(noise_view_gpu)
+                noise = noise_view_gpu
+            else
+                # CPU Path: Use pre-allocated buffers and threaded noise
+                batch = batch_cpu
+                noise = view(noise_cpu_buffer, :, :, 1:current_batch_size)
+                
+                # Threaded noise generation
+                Threads.@threads for b in 1:current_batch_size
+                    tid = Threads.threadid()
+                    rng_local = thread_rngs[tid]
+                    @inbounds @simd for i in 1:(L*C)
+                        noise[i + (b-1)*L*C] = randn(rng_local, Float32)
+                    end
+                end
+            end
+
             noisy = batch .+ cfg.sigma .* noise
 
             # Scale loss by accumulation steps for proper gradient magnitude
@@ -610,7 +643,6 @@ function train_multi_gpu!(model, dataset::NormalizedDataset, cfg::ScoreTrainerCo
     progress !== nothing && ProgressMeter.finish!(progress)
     return TrainingHistory(epoch_losses, batch_losses)
 end
-
 
 
 

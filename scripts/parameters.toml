@@ -11,7 +11,7 @@ dataset_key = "timeseries"
 samples_orientation = "columns"
 
 # Number of samples to use for training
-train_samples = 500000
+train_samples = 100000
 
 # Seed for random subset selection
 subset_seed = 2025
@@ -20,7 +20,7 @@ subset_seed = 2025
 dt = 1.0
 
 # Stride for sampling the data
-stride = 8
+stride = 1
 
 [model]
 # Number of input channels
@@ -49,10 +49,10 @@ init_seed = 314159
 
 [training]
 # Batch size for training
-batch_size = 1024
+batch_size = 128
 
 # Number of training epochs
-epochs = 20
+epochs = 10
 
 # Force retraining even if a trained model exists
 force_retrain = true
@@ -61,7 +61,8 @@ force_retrain = true
 lr = 0.001
 
 # Noise level (sigma) for score matching
-sigma = 0.05
+# Increased from 0.05 to 0.15 to improve signal-to-noise ratio for training
+sigma = 0.1
 
 # Whether to shuffle the dataset
 shuffle = true
@@ -91,24 +92,24 @@ min_lr_factor = 0.1
 # Enable verbose output
 verbose = true
 
-# Device to run on ("CPU" or "GPU")
-device = "GPU"
+# Device to run on ("CPU" or "GPU:0,1")
+device = "GPU:0"
 
 [langevin]
-# Time step for Langevin dynamics sampling
-sample_dt = 0.05
+# Integrator time step (dt)
+sample_dt = 0.01
 
 # Number of steps for Langevin dynamics
 nsteps = 10000
 
-# Resolution for spatial discretization (if applicable)
-resolution = 20
+# Save trajectory every 'resolution' steps (subsampling factor)
+resolution = 100
 
 # Number of ensembles (samples) to generate
 n_ensembles = 256
 
 # Number of burn-in steps to discard
-burn_in = 400
+burn_in = 1000
 
 # Number of bins for histograms/PDFs
 nbins = 384
