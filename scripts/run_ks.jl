@@ -1,4 +1,5 @@
 #!/usr/bin/env julia
+# nohup julia --project=. scripts/run_ks.jl > run_ks.log 2>&1 &
 
 using BSON
 using CairoMakie
@@ -10,7 +11,8 @@ using Random
 using ScoreUNet1D
 using ScoreUNet1D: NormalizedDataset, sample_length, num_channels,
     ExecutionDevice, CPUDevice, GPUDevice, select_device, move_model,
-    activate_device!, is_gpu, gpu_count, compute_stein_matrix
+    activate_device!, is_gpu, gpu_count, compute_stein_matrix,
+    ScoreWrapper, build_snapshot_integrator, compare_pdfs, relative_entropy
 using KernelDensity
 using TOML
 
@@ -168,6 +170,7 @@ function build_langevin_config(params::Dict{String,Any}, trainer_cfg::ScoreTrain
         seed = Int(get(params, "seed", 21)),
         mode = mode_from_value(get(params, "mode", "all")),
         boundary = boundary_tuple,
+        progress = Bool(get(params, "progress", false)),
     )
     return cfg
 end
@@ -219,7 +222,7 @@ function save_run_metadata(run_dir::AbstractString,
                            history::TrainingHistory,
                            kl_epochs::Vector{Int},
                            kl_history::Vector{Float64},
-                           result::LangevinResult;
+                           result;
                            data_path::AbstractString,
                            total_samples::Int,
                            train_samples::Int,
@@ -291,7 +294,88 @@ function save_training_plot(history::TrainingHistory,
     return path
 end
 
-function reshape_langevin_samples(result::LangevinResult, dataset::NormalizedDataset)
+struct KSRunLangevinResult
+    trajectory::Array{Float32,3}
+    bin_centers::Vector{Float64}
+    simulated_pdf::Vector{Float64}
+    observed_pdf::Vector{Float64}
+    kl_divergence::Float64
+end
+
+function select_modes(values::AbstractMatrix, L::Int, C::Int, mode::Symbol)
+    mode === :all && return values
+    throw(ArgumentError("Unsupported mode selector $mode"))
+end
+
+function select_modes(values::AbstractMatrix, L::Int, C::Int, mode::Integer)
+    1 <= mode <= C || throw(ArgumentError("Mode index must be between 1 and $C"))
+    start = (mode - 1) * L + 1
+    stop = start + L - 1
+    return values[start:stop, :]
+end
+
+function run_langevin_with_ensemble(model,
+                                    dataset::NormalizedDataset,
+                                    trainer_cfg::ScoreTrainerConfig,
+                                    langevin_cfg,
+                                    device::ExecutionDevice)
+    L = sample_length(dataset)
+    C = num_channels(dataset)
+    dim = L * C
+    n_ens = max(langevin_cfg.n_ensembles, 1)
+
+    Random.seed!(langevin_cfg.seed)
+
+    x0 = Matrix{Float32}(undef, dim, n_ens)
+    for i in 1:n_ens
+        idx = rand(1:length(dataset))
+        x0[:, i] = reshape(dataset.data[:, :, idx], dim)
+    end
+
+    device_str = is_gpu(device) ? "gpu" : "cpu"
+
+    score_wrapper = ScoreWrapper(model, Float32(trainer_cfg.sigma), L, C, dim)
+    integrator = build_snapshot_integrator(score_wrapper; device=device_str)
+
+    Phi = Matrix{Float32}(I, dim, dim)
+    Sigma = Matrix{Float32}(I, dim, dim)
+
+    traj_state = integrator(x0, Phi, Sigma;
+                            dt = langevin_cfg.dt,
+                            n_steps = langevin_cfg.nsteps,
+                            burn_in = langevin_cfg.burn_in,
+                            resolution = langevin_cfg.resolution,
+                            boundary = langevin_cfg.boundary,
+                            progress = langevin_cfg.progress,
+                            progress_desc = "Langevin integration")
+
+    traj = Array{Float32,3}(traj_state)
+
+    flattened = reshape(traj, dim, :)
+    observed = reshape(dataset.data, dim, :)
+
+    sim_modes = select_modes(flattened, L, C, langevin_cfg.mode)
+    obs_modes = select_modes(observed, L, C, langevin_cfg.mode)
+
+    obs_min = Float64(minimum(observed))
+    obs_max = Float64(maximum(observed))
+    if obs_min == obs_max
+        δ = max(abs(obs_min), 1.0) * 1e-3
+        obs_min -= δ
+        obs_max += δ
+    elseif obs_min > obs_max
+        obs_min, obs_max = obs_max, obs_min
+    end
+
+    centers, sim_pdf, obs_pdf, sim_mass, obs_mass = compare_pdfs(sim_modes, obs_modes;
+                                                                 nbins=langevin_cfg.nbins,
+                                                                 bounds=(obs_min, obs_max))
+    kl = relative_entropy(obs_mass, sim_mass)
+
+    return KSRunLangevinResult(traj, centers, sim_pdf, obs_pdf, kl)
+end
+
+function reshape_langevin_samples(result, dataset::NormalizedDataset)
     L = sample_length(dataset)
     C = num_channels(dataset)
     dim, T, E = size(result.trajectory)
@@ -386,10 +470,10 @@ function compute_heatmap_specs(sim_tensor::Array{Float32,3},
     return specs
 end
 
-function save_comparison_figure(result::LangevinResult,
+function save_comparison_figure(result,
                                 sim_tensor::Array{Float32,3},
                                 obs_tensor::Array{Float32,3},
-                                langevin_cfg::LangevinConfig,
+                                langevin_cfg,
                                 path::AbstractString;
                                 offsets::Tuple{Vararg{Int}}=DEFAULT_LAG_OFFSETS,
                                 value_bounds::Union{Nothing,Tuple{Float64,Float64}}=nothing,
@@ -463,19 +547,19 @@ function run_training_and_monitor!(model,
                                    pdf_dataset::NormalizedDataset,
                                    train_data::NormalizedDataset,
                                    trainer_cfg::ScoreTrainerConfig,
-                                   langevin_cfg::LangevinConfig,
-                                   corr_info,
+                                   langevin_cfg,
                                    eval_interval::Int,
                                    verbose::Bool,
-                                   device::ExecutionDevice)
+                                   train_device::ExecutionDevice,
+                                   langevin_device::ExecutionDevice)
     interval = max(eval_interval, 0)
     kl_epochs = Int[]
     kl_values = Float64[]
-    last_result = Ref{Union{Nothing,LangevinResult}}(nothing)
+    last_result = Ref{Any}(nothing)
 
     function evaluate!(epoch, current_model, label_suffix)
         res = timed("Langevin integration ($label_suffix)", verbose) do
-            run_langevin(current_model, pdf_dataset, langevin_cfg, corr_info; device=device)
+            run_langevin_with_ensemble(current_model, pdf_dataset, trainer_cfg, langevin_cfg, langevin_device)
         end
         push!(kl_epochs, epoch)
         push!(kl_values, res.kl_divergence)
@@ -490,183 +574,208 @@ function run_training_and_monitor!(model,
         end
     end
 
+    trained_model = Ref(model)  # Track the latest model
+    epoch_callback_with_capture = (epoch, m, epoch_time) -> begin
+        trained_model[] = m  # Capture the updated model
+        epoch_callback(epoch, m, epoch_time)
+    end
+
     history = timed("Training loop", verbose) do
         train!(model, train_data, trainer_cfg;
-               epoch_callback=epoch_callback,
-               device=device)
+               epoch_callback=epoch_callback_with_capture,
+               device=train_device)
     end
     if isempty(kl_epochs) || kl_epochs[end] != trainer_cfg.epochs
-        evaluate!(trainer_cfg.epochs, model, "epoch $(trainer_cfg.epochs)")
+        evaluate!(trainer_cfg.epochs, trained_model[], "epoch $(trainer_cfg.epochs)")
     end
     final_result = last_result[]
-    return history, kl_epochs, kl_values, final_result
+    return history, kl_epochs, kl_values, final_result, trained_model[]
 end
 
-function main()
-    # Configure BLAS threading for optimal CPU performance
-    # Set BLAS to single-threaded to avoid contention with Julia's threading
-    # This is critical for CPU-optimized Langevin integration performance
-    BLAS.set_num_threads(1)
-    @info "BLAS threading configured" blas_threads=BLAS.get_num_threads() julia_threads=Threads.nthreads()
+#########################
+# Top-level execution
+#########################
 
-    params = load_parameters()
-    data_params = get(params, "data", Dict{String,Any}())
-    model_params = get(params, "model", Dict{String,Any}())
-    training_params = get(params, "training", Dict{String,Any}())
-    langevin_params = get(params, "langevin", Dict{String,Any}())
-    output_params = get(params, "output", Dict{String,Any}())
-    run_params = get(params, "run", Dict{String,Any}())
-    verbose = get(run_params, "verbose", false)
-    device_name = uppercase(String(get(run_params, "device", "CPU")))
-    device = select_device(device_name)
-    activate_device!(device)
-    @info "Execution device selected" device=device_name gpus=is_gpu(device) ? gpu_count(device) : 0
+# BLAS / threading info
+@info "BLAS threading configured" blas_threads=BLAS.get_num_threads() julia_threads=Threads.nthreads()
 
-    data_path = resolve_path(get(data_params, "path", "data/new_ks.hdf5"))
-    dataset_key = get(data_params, "dataset_key", nothing)
-    dataset_key = dataset_key === "" ? nothing : dataset_key
-    samples_orientation = symbol_from_string(get(data_params, "samples_orientation", "rows"))
-    train_samples = Int(get(data_params, "train_samples", 0))
-    subset_seed = Int(get(data_params, "subset_seed", 0))
-    mode_stride = Int(get(data_params, "stride", 1))
-    data_dt = Float64(get(data_params, "dt", 1.0))
+# Load configuration
+params = load_parameters()
+data_params = get(params, "data", Dict{String,Any}())
+model_params = get(params, "model", Dict{String,Any}())
+training_params = get(params, "training", Dict{String,Any}())
+langevin_params = get(params, "langevin", Dict{String,Any}())
+output_params = get(params, "output", Dict{String,Any}())
+run_params = get(params, "run", Dict{String,Any}())
+verbose = get(run_params, "verbose", false)
 
-    dataset = timed("Loading dataset", verbose) do
-        load_hdf5_dataset(data_path;
-                          dataset_key=dataset_key,
-                          samples_orientation=samples_orientation,
-                          stride=mode_stride)
-    end
-    @info "Loaded dataset" size=size(dataset.data)
-    raw_min = Float64(minimum(dataset.data))
-    raw_max = Float64(maximum(dataset.data))
-    value_bounds = ensure_bounds((raw_min, raw_max))
+# Devices
+device_name = uppercase(String(get(run_params, "device", "CPU")))
+device = select_device(device_name)
+activate_device!(device)
+@info "Execution device selected" device=device_name gpus=is_gpu(device) ? gpu_count(device) : 0
 
-    train_data = timed("Preparing training subset", verbose) do
-        subset_dataset(dataset, train_samples; seed=subset_seed)
-    end
-    @info "Training subset" size=size(train_data.data) nmax=train_samples
-
-    model_cfg, model_seed = build_model_config(model_params)
-    L = sample_length(dataset)
-    max_levels = max(1, floor(Int, log2(max(L, 2))))
-    if length(model_cfg.channel_multipliers) > max_levels
-        @warn "Reducing UNet depth to fit short sequences" requested_levels=length(model_cfg.channel_multipliers) max_levels=max_levels
-        model_cfg = deepcopy(model_cfg)
-        model_cfg.channel_multipliers = model_cfg.channel_multipliers[1:max_levels]
-    end
-    levels = length(model_cfg.channel_multipliers)
-    deepest_L = max(1, L ÷ (2^(levels - 1)))
-    max_kernel = deepest_L <= 2 ? 1 : min(L, deepest_L)
-    if model_cfg.kernel_size > max_kernel
-        @warn "Clamping kernel_size for smallest feature map" requested=model_cfg.kernel_size length=L deepest_length=deepest_L
-        model_cfg = deepcopy(model_cfg)
-        model_cfg.kernel_size = max_kernel
-    end
-    trainer_cfg = build_trainer_config(training_params)
-    langevin_cfg = build_langevin_config(langevin_params, trainer_cfg, data_dt)
-    output_cfg = build_output_config(output_params)
-    eval_interval = Int(get(training_params, "langevin_eval_interval", 1))
-    corr_info = nothing
-
-    model_repo_path = output_cfg.model_repository_path
-    run_root = output_cfg.run_root
-    run_model_filename = output_cfg.run_model_filename
-    lag_offsets = output_cfg.lag_offsets
-
-    run_dir = create_run_directory(run_root)
-    params_copy = timed("Copying parameters file", verbose) do
-        copy_parameters_file(run_dir, PARAMETERS_PATH)
-    end
-
-    model_exists = isfile(model_repo_path)
-    force_retrain = get(training_params, "force_retrain", false)
-    
-    if model_exists && !force_retrain
-        @info "Loading pretrained model" path=model_repo_path
-        model, saved_cfg = load_saved_model(model_repo_path)
-        saved_cfg isa ScoreUNetConfig && (model_cfg = saved_cfg)
-    else
-        model = instantiate_model(model_cfg, model_seed)
-    end
-    model = move_model(model, device)
-
-    history = TrainingHistory(Float32[], Float32[])
-    kl_epochs = Int[]
-    kl_history = Float64[]
-    training_performed = false
-    result = nothing
-
-    if model_exists && !force_retrain
-        result = timed("Langevin integration (pretrained model)", verbose) do
-            run_langevin(model, dataset, langevin_cfg, corr_info; device=device)
-        end
-    else
-        training_performed = true
-        history, kl_epochs, kl_history, result = run_training_and_monitor!(
-            model, dataset, train_data, trainer_cfg, langevin_cfg,
-            corr_info, eval_interval, verbose, device)
-    end
-
-    model_cpu = device isa GPUDevice ? move_model(model, CPUDevice()) : model
-
-    if training_performed
-        timed("Saving reusable model checkpoint", verbose) do
-            save_model(model_repo_path, model_cpu, model_cfg)
-        end
-    end
-
-    run_model_path = joinpath(run_dir, run_model_filename)
-    timed("Saving run-specific model checkpoint", verbose) do
-        save_model(run_model_path, model_cpu, model_cfg)
-    end
-
-    training_plot = nothing
-    if training_performed
-        training_plot = timed("Saving training metrics figure", verbose) do
-            save_training_plot(history, kl_epochs, kl_history,
-                               joinpath(run_dir, "training_metrics.png"))
-        end
-    end
-
-    stein_matrix = timed("Estimating Stein matrix", verbose) do
-        compute_stein_matrix(model, dataset, trainer_cfg.sigma;
-                             batch_size=trainer_cfg.batch_size,
-                             device=device)
-    end
-    stein_dim = size(stein_matrix, 1)
-    eye = Matrix{Float64}(I, stein_dim, stein_dim)
-    stein_distance = sqrt(sum(abs2, stein_matrix .+ eye))
-
-    sim_tensor = reshape_langevin_samples(result, dataset)
-    comparison_plot = timed("Generating PDF comparison figure", verbose) do
-        save_comparison_figure(result, sim_tensor, dataset.data, langevin_cfg,
-                               joinpath(run_dir, "comparison.png");
-                               offsets=lag_offsets,
-                               value_bounds=value_bounds,
-                               stein_matrix=stein_matrix,
-                               stein_distance=stein_distance)
-    end
-
-    config_path = timed("Writing run metadata", verbose) do
-        save_run_metadata(run_dir, params, history, kl_epochs, kl_history, result;
-                          data_path=data_path,
-                          total_samples=length(dataset),
-                          train_samples=length(train_data),
-                          subset_seed=subset_seed,
-                          model_seed=model_seed,
-                          configuration_path=params_copy,
-                          training_performed=training_performed,
-                          training_plot=training_plot,
-                          comparison_plot=comparison_plot,
-                          model_repo_path=model_repo_path,
-                          run_model_path=run_model_path,
-                          stein_distance=stein_distance)
-    end
-
-    @printf("KL divergence: %.6e\n", result.kl_divergence)
-    @info "Run artifacts saved" dir=run_dir training_plot=training_plot comparison_plot=comparison_plot config=config_path model=run_model_path
-    return result
+langevin_device_name_raw = get(run_params, "langevin_device", "")
+langevin_device_name = String(langevin_device_name_raw)
+langevin_device = if isempty(strip(langevin_device_name))
+    device
+else
+    select_device(uppercase(langevin_device_name))
 end
 
-result = main()
+# Data loading
+data_path = resolve_path(get(data_params, "path", "data/new_ks.hdf5"))
+dataset_key = get(data_params, "dataset_key", nothing)
+dataset_key = dataset_key === "" ? nothing : dataset_key
+samples_orientation = symbol_from_string(get(data_params, "samples_orientation", "rows"))
+train_samples = Int(get(data_params, "train_samples", 0))
+subset_seed = Int(get(data_params, "subset_seed", 0))
+mode_stride = Int(get(data_params, "stride", 1))
+data_dt = Float64(get(data_params, "dt", 1.0))
+
+dataset = timed("Loading dataset", verbose) do
+    load_hdf5_dataset(data_path;
+                      dataset_key=dataset_key,
+                      samples_orientation=samples_orientation,
+                      stride=mode_stride)
+end
+@info "Loaded dataset" size=size(dataset.data)
+raw_min = Float64(minimum(dataset.data))
+raw_max = Float64(maximum(dataset.data))
+value_bounds = ensure_bounds((raw_min, raw_max))
+
+train_data = timed("Preparing training subset", verbose) do
+    subset_dataset(dataset, train_samples; seed=subset_seed)
+end
+@info "Training subset" size=size(train_data.data) nmax=train_samples
+
+# Model & trainer configuration
+model_cfg, model_seed = build_model_config(model_params)
+L = sample_length(dataset)
+max_levels = max(1, floor(Int, log2(max(L, 2))))
+if length(model_cfg.channel_multipliers) > max_levels
+    @warn "Reducing UNet depth to fit short sequences" requested_levels=length(model_cfg.channel_multipliers) max_levels=max_levels
+    model_cfg = deepcopy(model_cfg)
+    model_cfg.channel_multipliers = model_cfg.channel_multipliers[1:max_levels]
+end
+levels = length(model_cfg.channel_multipliers)
+deepest_L = max(1, L ÷ (2^(levels - 1)))
+max_kernel = deepest_L <= 2 ? 1 : min(L, deepest_L)
+if model_cfg.kernel_size > max_kernel
+    @warn "Clamping kernel_size for smallest feature map" requested=model_cfg.kernel_size length=L deepest_length=deepest_L
+    model_cfg = deepcopy(model_cfg)
+    model_cfg.kernel_size = max_kernel
+end
+
+trainer_cfg = build_trainer_config(training_params)
+langevin_cfg = build_langevin_config(langevin_params, trainer_cfg, data_dt)
+output_cfg = build_output_config(output_params)
+eval_interval = Int(get(training_params, "langevin_eval_interval", 1))
+
+# Output paths
+model_repo_path = output_cfg.model_repository_path
+run_root = output_cfg.run_root
+run_model_filename = output_cfg.run_model_filename
+lag_offsets = output_cfg.lag_offsets
+
+run_dir = create_run_directory(run_root)
+params_copy = timed("Copying parameters file", verbose) do
+    copy_parameters_file(run_dir, PARAMETERS_PATH)
+end
+
+# Model loading / training control
+model_exists = isfile(model_repo_path)
+force_retrain = get(training_params, "force_retrain", false)
+
+history = TrainingHistory(Float32[], Float32[])
+kl_epochs = Int[]
+kl_history = Float64[]
+training_performed = false
+result = nothing
+
+if !force_retrain && !model_exists
+    error("force_retrain=false but no pretrained model found at $(model_repo_path). Train a model first or set force_retrain=true.")
+end
+
+if model_exists
+    @info "Loading pretrained model" path=model_repo_path
+    model, saved_cfg = load_saved_model(model_repo_path)
+    saved_cfg isa ScoreUNetConfig && (model_cfg = saved_cfg)
+else
+    model = instantiate_model(model_cfg, model_seed)
+end
+
+model = move_model(model, device)
+
+if force_retrain
+    training_performed = true
+    history, kl_epochs, kl_history, result, trained_model = run_training_and_monitor!(
+        model, dataset, train_data, trainer_cfg, langevin_cfg,
+        eval_interval, verbose, device, langevin_device)
+    model = trained_model
+else
+    result = timed("Langevin integration (pretrained model)", verbose) do
+        run_langevin_with_ensemble(model, dataset, trainer_cfg, langevin_cfg, langevin_device)
+    end
+end
+
+# Save model checkpoints
+model_cpu = device isa GPUDevice ? move_model(model, CPUDevice()) : model
+
+if training_performed
+    timed("Saving reusable model checkpoint", verbose) do
+        save_model(model_repo_path, model_cpu, model_cfg)
+    end
+end
+
+run_model_path = joinpath(run_dir, run_model_filename)
+timed("Saving run-specific model checkpoint", verbose) do
+    save_model(run_model_path, model_cpu, model_cfg)
+end
+
+# Plots and diagnostics
+training_plot = nothing
+if training_performed
+    training_plot = timed("Saving training metrics figure", verbose) do
+        save_training_plot(history, kl_epochs, kl_history,
+                           joinpath(run_dir, "training_metrics.png"))
+    end
+end
+
+stein_matrix = timed("Estimating Stein matrix", verbose) do
+    compute_stein_matrix(model, dataset, trainer_cfg.sigma;
+                         batch_size=trainer_cfg.batch_size,
+                         device=device)
+end
+stein_dim = size(stein_matrix, 1)
+eye = Matrix{Float64}(I, stein_dim, stein_dim)
+stein_distance = sqrt(sum(abs2, stein_matrix .+ eye))
+
+sim_tensor = reshape_langevin_samples(result, dataset)
+comparison_plot = timed("Generating PDF comparison figure", verbose) do
+    save_comparison_figure(result, sim_tensor, dataset.data, langevin_cfg,
+                           joinpath(run_dir, "comparison.png");
+                           offsets=lag_offsets,
+                           value_bounds=value_bounds,
+                           stein_matrix=stein_matrix,
+                           stein_distance=stein_distance)
+end
+
+config_path = timed("Writing run metadata", verbose) do
+    save_run_metadata(run_dir, params, history, kl_epochs, kl_history, result;
+                      data_path=data_path,
+                      total_samples=length(dataset),
+                      train_samples=length(train_data),
+                      subset_seed=subset_seed,
+                      model_seed=model_seed,
+                      configuration_path=params_copy,
+                      training_performed=training_performed,
+                      training_plot=training_plot,
+                      comparison_plot=comparison_plot,
+                      model_repo_path=model_repo_path,
+                      run_model_path=run_model_path,
+                      stein_distance=stein_distance)
+end
+
+@printf("KL divergence: %.6e\n", result.kl_divergence)
+@info "Run artifacts saved" dir=run_dir training_plot=training_plot comparison_plot=comparison_plot config=config_path model=run_model_path

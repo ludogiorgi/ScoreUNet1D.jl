@@ -4,8 +4,8 @@ using Statistics
 using StatsBase
 using KernelDensity
 using Base.Threads
-import CUDA
 using Dates
+using ProgressMeter
 
 Base.@kwdef mutable struct LangevinConfig
     dt::Float64 = 1e-2              # integrator step
@@ -19,6 +19,7 @@ Base.@kwdef mutable struct LangevinConfig
     seed::Int = 21
     mode::Union{Symbol,Int} = :all
     boundary::Union{Nothing,Tuple{Float64,Float64}} = (-10.0, 10.0)
+    progress::Bool = false          # show progress bar during Langevin integration
 end
 
 struct LangevinResult
@@ -135,12 +136,20 @@ Flux.@functor ScoreWrapper (model,)
 
 function (sw::ScoreWrapper)(x::AbstractMatrix)
     B = size(x, 2)
-    # Convert to Float32 to match model precision
+    T = eltype(x)
+
+    # Fast path: inputs already Float32 (no conversions/allocations)
+    if T <: Float32
+        x_reshaped = reshape(x, sw.L, sw.C, B)
+        scores = score_from_model(sw.model, x_reshaped, sw.sigma)
+        return reshape(scores, sw.dim, B)
+    end
+
+    # Fallback: convert to Float32 for the model, then back to input type
     x_f32 = Float32.(x)
     x_reshaped = reshape(x_f32, sw.L, sw.C, B)
     scores = score_from_model(sw.model, x_reshaped, sw.sigma)
-    # Convert back to match input type for consistency
-    return eltype(x).(reshape(scores, sw.dim, B))
+    return T.(reshape(scores, sw.dim, B))
 end
 
 """
@@ -151,6 +160,29 @@ with Phi=Sigma=Identity, which reduces to the standard form `dx = s(x)dt + sqrt(
 Uses `cfg.resolution` and `cfg.burn_in` to control how often snapshots are stored and
 how many are discarded as burn-in before estimating the steady-state PDF.
 """
+
+# Module-level cache for ScoreWrapper to enable caching in EnsembleIntegrator
+# Key: (model object id, sigma, L, C, dim, device_str)
+const SCORE_WRAPPER_CACHE = Dict{UInt, Any}()
+
+function get_cached_wrapper(model, sigma::Float32, L::Int, C::Int, dim::Int, device_str::String)
+    # Use object_id of model as part of the cache key
+    # This ensures we reuse wrappers for the same model across calls
+    key = hash((objectid(model), sigma, L, C, dim, device_str))
+    
+    return get!(SCORE_WRAPPER_CACHE, key) do
+        # Move model to target device once, then create wrapper
+        model_on_device = if device_str == "cpu"
+            m = Flux.cpu(model)
+            Flux.testmode!(m)  # Set testmode once
+            m
+        else
+            model  # GPU path handles this in EnsembleIntegrator
+        end
+        ScoreWrapper(model_on_device, sigma, L, C, dim)
+    end
+end
+
 function run_langevin(model, dataset::NormalizedDataset, cfg::LangevinConfig,
                       corr_info::Union{Nothing,CorrelationInfo}=nothing;
                       device::ExecutionDevice=CPUDevice())
@@ -161,8 +193,10 @@ function run_langevin(model, dataset::NormalizedDataset, cfg::LangevinConfig,
     n_ens = max(cfg.n_ensembles, 1)
 
     # Use identity matrices for Phi and Sigma as specified in AGENTS.md
-    Phi = Matrix{Float64}(I, dim, dim)
-    Sigma = Matrix{Float64}(I, dim, dim)
+    # Keep everything in Float32 to match the score model and avoid
+    # unnecessary conversions inside the integrator.
+    Phi = Matrix{Float32}(I, dim, dim)
+    Sigma = Matrix{Float32}(I, dim, dim)
 
     # Derive integration schedule from config
     dt = cfg.dt
@@ -187,40 +221,46 @@ function run_langevin(model, dataset::NormalizedDataset, cfg::LangevinConfig,
 
     total_time = segment_time * total_snapshots
 
-    # Determine device string for evolve_sde
+    # Determine device string for evolve_sde_snapshots
     device_str = is_gpu(device) ? "gpu" : "cpu"
-
-    # Prepare score model wrapper
-    # Ensure model is on CPU initially for the wrapper, EnsembleIntegrator handles moving to GPU
-    cpu_model = Flux.cpu(model)
-    wrapper = ScoreWrapper(cpu_model, cfg.sigma, L, C, dim)
 
     # Seed RNG for reproducible ensemble initialization
     Random.seed!(cfg.seed)
 
     # Sample initial conditions
     # We need a (dim, n_ens) matrix
-    x0 = Matrix{Float64}(undef, dim, n_ens)
+    x0 = Matrix{Float32}(undef, dim, n_ens)
     for i in 1:n_ens
         idx = rand(1:length(dataset))
-        # dataset.data is (L, C, N)
+        # dataset.data is (L, C, N) with Float32 storage
         x0[:, i] = reshape(dataset.data[:, :, idx], dim)
     end
 
     @info "Running $(n_ens) ensembles using EnsembleIntegrator" device=device_str dt=dt nsteps=total_steps resolution=steps_per_snapshot burn_in=burn_in_steps snapshots=keep_snapshots total_time=total_time
 
-    # Integrate using evolve_sde in segments, storing snapshots every `steps_per_snapshot`
-    traj = Array{Float32}(undef, dim, keep_snapshots, n_ens)
-    x_curr = x0
-    snapshot_idx = 0
-    for step_block in 1:total_snapshots
-        # Advance by one snapshot interval
-        x_curr = evolve_sde(wrapper, x_curr, Phi, Sigma, dt, segment_time; device=device_str)
-        if step_block > burn_in_snapshots
-            snapshot_idx += 1
-            traj[:, snapshot_idx, :] .= Float32.(x_curr)
-        end
-    end
+    # Get or create cached wrapper - this avoids repeated Flux.cpu/deepcopy
+    # in EnsembleIntegrator by reusing the same wrapper object
+    wrapper = get_cached_wrapper(model, cfg.sigma, L, C, dim, device_str)
+
+    # Use the optimized evolve_sde_snapshots function (same as test_Q.jl)
+    # This avoids the overhead of calling integrate_on_device! in a loop
+    # and uses cached GPU/CPU state for efficiency.
+    #
+    # PERFORMANCE NOTE: We pass boundary=nothing to avoid per-step boundary
+    # checking overhead. The boundary check iterates over all dimensions
+    # every step which is costly for long integrations. If boundary enforcement
+    # is critical, consider a post-processing clamp or sparse checking.
+    traj = EnsembleIntegrator.evolve_sde_snapshots(
+        wrapper, x0, Phi, Sigma;
+        dt = dt,
+        n_steps = total_steps,
+        burn_in = burn_in_steps,
+        resolution = steps_per_snapshot,
+        device = device_str,
+        boundary = nothing,  # Disabled for performance - was cfg.boundary
+        progress = cfg.progress,
+        progress_desc = "Langevin integration"
+    )
 
     flattened = reshape(traj, dim, :)
     observed = reshape(dataset.data, dim, :)
@@ -385,12 +425,22 @@ function relative_entropy(p::AbstractVector, q::AbstractVector)
     return acc
 end
 
+"""
+    compute_stein_matrix(model, dataset, sigma; batch_size=256, device=CPUDevice(), sample_stride=1)
+
+Estimate the Stein matrix `V = E[s(x) xᵀ]` by evaluating the learned score
+function on unperturbed samples drawn from `dataset` (optionally subsampled by
+`sample_stride`). No synthetic noise is added during estimation.
+"""
 function compute_stein_matrix(model,
                               dataset::NormalizedDataset,
                               sigma::Real;
                               batch_size::Int=256,
                               device::ExecutionDevice=CPUDevice(),
                               sample_stride::Int=1)
+    # Put model in test mode for consistent BatchNorm behavior
+    Flux.testmode!(model)
+    
     L = sample_length(dataset)
     C = num_channels(dataset)
     dim = L * C
@@ -406,21 +456,18 @@ function compute_stein_matrix(model,
         Threads.@threads for worker in 1:ndev
             gpu_idx = worker
             local_model = move_model(model, device; device_index=gpu_idx)
+            Flux.testmode!(local_model)  # Ensure testmode on moved model
             local_V = partials[gpu_idx]
             local_count = 0
             for batch_id in worker:ndev:length(batches)
                 batch_idxs = batches[batch_id]
                 batch_cpu = Array(dataset.data[:, :, batch_idxs])
                 dev_batch = move_array(batch_cpu, device; device_index=gpu_idx)
-                
-                # Add noise to sample from p_sigma
-                noise = similar(dev_batch)
-                CUDA.randn!(noise)
-                noisy_batch = dev_batch .+ sigma .* noise
-                
-                scores = score_from_model(local_model, noisy_batch, sigma)
+
+                # Evaluate scores on original (unperturbed) samples
+                scores = score_from_model(local_model, dev_batch, sigma)
                 score_mat = Array(reshape(scores, dim, size(batch_cpu, 3)))
-                x_mat = Array(reshape(noisy_batch, dim, size(batch_cpu, 3)))
+                x_mat = Array(reshape(batch_cpu, dim, size(batch_cpu, 3)))
                 local_V .+= score_mat * transpose(x_mat)
                 local_count += length(batch_idxs)
             end
@@ -432,19 +479,16 @@ function compute_stein_matrix(model,
         return reduce(+, partials) ./ total
     elseif device isa GPUDevice
         model_on_device = move_model(model, device)
+        Flux.testmode!(model_on_device)  # Ensure testmode on moved model
         stein_acc = zeros(Float64, dim, dim)
         for batch_idxs in batches
             batch_cpu = Array(dataset.data[:, :, batch_idxs])
             dev_batch = move_array(batch_cpu, device)
-            
-            # Add noise to sample from p_sigma
-            noise = similar(dev_batch)
-            CUDA.randn!(noise)
-            noisy_batch = dev_batch .+ sigma .* noise
-            
-            scores = score_from_model(model_on_device, noisy_batch, sigma)
+
+            # Evaluate scores on original (unperturbed) samples
+            scores = score_from_model(model_on_device, dev_batch, sigma)
             score_mat = Array(reshape(scores, dim, size(batch_cpu, 3)))
-            x_mat = Array(reshape(noisy_batch, dim, size(batch_cpu, 3)))
+            x_mat = Array(reshape(batch_cpu, dim, size(batch_cpu, 3)))
             stein_acc .+= score_mat * transpose(x_mat)
             total += length(batch_idxs)
         end
@@ -459,14 +503,11 @@ function compute_stein_matrix(model,
             tid = threadid()
             batch_idxs = batches[batch_id]
             batch_cpu = Array(dataset.data[:, :, batch_idxs])
-            
-            # Add noise to sample from p_sigma
-            noise = randn(eltype(batch_cpu), size(batch_cpu))
-            noisy_batch = batch_cpu .+ sigma .* noise
-            
-            scores = score_from_model(model_on_device, noisy_batch, sigma)
+
+            # Evaluate scores on original (unperturbed) samples
+            scores = score_from_model(model_on_device, batch_cpu, sigma)
             score_mat = Float64.(reshape(scores, dim, size(batch_cpu, 3)))
-            x_mat = Float64.(reshape(noisy_batch, dim, size(batch_cpu, 3)))
+            x_mat = Float64.(reshape(batch_cpu, dim, size(batch_cpu, 3)))
             partials[tid] .+= score_mat * transpose(x_mat)
             counts[tid] += length(batch_idxs)
         end

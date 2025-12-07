@@ -64,6 +64,7 @@ function train_single_device!(model, dataset::NormalizedDataset, cfg::ScoreTrain
     end
     
     model_on_device = model
+    Flux.trainmode!(model_on_device) # Ensure BatchNorm stats are updated
     opt_state = Flux.setup(Flux.Optimisers.Adam(cfg.lr), model_on_device)
     epoch_losses = Float32[]
     batch_losses = Float32[]
@@ -229,11 +230,16 @@ end
     score_from_model(model, batch, sigma)
 
 Returns the estimated score ∇ log p(x) by rescaling the predicted noise.
+
+The denoising score matching identity: for y = x + σz where z ~ N(0,I),
+the model learns to predict E[z|y]. The score of the smoothed density is:
+    ∇ log p_σ(y) = -E[σz|y] / σ² = -E[z|y] / σ = -model(y) / σ
 """
 function score_from_model(model, batch, sigma::Real)
     preds = model(batch)
     inv_sigma = -one(eltype(preds)) / sigma
-    return inv_sigma .* preds
+    @. preds *= inv_sigma
+    return preds
 end
 
 function seed_thread_rngs(seed::Int)
@@ -643,7 +649,6 @@ function train_multi_gpu!(model, dataset::NormalizedDataset, cfg::ScoreTrainerCo
     progress !== nothing && ProgressMeter.finish!(progress)
     return TrainingHistory(epoch_losses, batch_losses)
 end
-
 
 
 

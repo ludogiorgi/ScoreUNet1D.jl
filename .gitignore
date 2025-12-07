@@ -17,3 +17,6 @@
 
 # Generated artifacts
 scripts/*.bson
+
+# Exclude all PNG files
+*.png
