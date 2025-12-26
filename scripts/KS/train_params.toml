@@ -1,0 +1,89 @@
+# ==============================================================================
+# Training Parameters for Kuramoto-Sivashinsky Score Network
+# ==============================================================================
+
+[data]
+# Path to the HDF5 dataset (relative to project root)
+path = "data/KS/new_ks.hdf5"
+
+# Key in the HDF5 file containing the dataset
+dataset_key = "timeseries"
+
+# Orientation of samples ("columns" or "rows")
+samples_orientation = "columns"
+
+[model]
+# Number of input channels
+in_channels = 1
+
+# Base number of channels for the U-Net
+base_channels = 16
+
+# Multipliers for channels at each UNet level
+channel_multipliers = [1, 2, 4]
+
+# Convolution kernel size
+kernel_size = 5
+
+# Use periodic boundary conditions
+periodic = true
+
+# Activation function (swish, gelu, relu, tanh, identity, softplus)
+activation = "swish"
+
+# Final layer activation
+final_activation = "identity"
+
+# Seed for model initialization
+init_seed = 314159
+
+[training]
+# Batch size
+batch_size = 528
+
+# Number of epochs
+epochs = 100
+
+# Force retraining even if model exists
+force_retrain = true
+
+# Learning rate
+lr = 0.001
+
+# Noise level (sigma) for denoising score matching
+sigma = 0.1
+
+# Shuffle dataset each epoch
+shuffle = true
+
+# Show progress bar
+progress = true
+
+# Random seed for training
+seed = 42
+
+# Gradient accumulation steps
+accumulation_steps = 1
+
+# Use learning rate schedule
+use_lr_schedule = true
+
+# Warmup steps for scheduler
+warmup_steps = 100
+
+# Minimum learning rate factor
+min_lr_factor = 0.1
+
+# Number of samples to randomly select each epoch (0 = use all)
+epoch_subset_size = 100000
+
+[output]
+# Path to save trained model
+model_path = "scripts/KS/trained_model.bson"
+
+[run]
+# Verbose logging
+verbose = true
+
+# Compute device ("CPU", "GPU", "GPU:0", etc.)
+device = "GPU:0"

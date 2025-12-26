@@ -1,0 +1,18 @@
+# ==============================================================================
+# Pipeline Parameters for Kuramoto-Sivashinsky Iterative Training
+# ==============================================================================
+
+[pipeline]
+# Number of train-integrate-plot iterations
+n_iterations = 1
+
+# Where to create run folders
+run_root = "runs/KS"
+
+# Model path in scripts/KS (updated each iteration)
+model_path = "scripts/KS/trained_model.bson"
+
+# Config file paths (relative to scripts/KS)
+train_config = "train_params.toml"
+integrate_config = "integrate_params.toml"
+plot_config = "plot_params.toml"

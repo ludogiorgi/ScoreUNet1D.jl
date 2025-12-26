@@ -1,22 +1,24 @@
 # Ignore everything by default
 *
 
-# Explicitly allow the files/folders we want to commit
+# Allow a small, source-only set of files
 !.gitignore
-!Manifest.toml
-!Project.toml
 !README.md
-!scripts/
+!Project.toml
+!Manifest.toml
+
+# Allow directories so we can selectively unignore file types within them
 !src/
+!src/**/
+!scripts/
+!scripts/**/
 !test/
+!test/**/
 
-# Allow everything inside the allowed directories
-!scripts/**
-!src/**
-!test/**
+# Allow only source/config files in those directories
+!src/**/*.jl
+!scripts/**/*.jl
+!scripts/**/*.toml
+!test/**/*.jl
 
-# Generated artifacts
-scripts/*.bson
-
-# Exclude all PNG files
-*.png
+# Everything else (artifacts, data, binaries, figures, logs) remains ignored by default.

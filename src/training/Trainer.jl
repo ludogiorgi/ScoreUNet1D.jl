@@ -19,6 +19,7 @@ Base.@kwdef mutable struct ScoreTrainerConfig
     use_lr_schedule::Bool = false  # Enable learning rate scheduling
     warmup_steps::Int = 500  # Linear warmup steps
     min_lr_factor::Float64 = 0.1  # Minimum LR as fraction of max_lr
+    epoch_subset_size::Int = 0  # If > 0, randomly sample this many samples each epoch
 end
 
 struct TrainingHistory
@@ -32,37 +33,37 @@ end
 Runs denoising score matching with σ = cfg.sigma.
 """
 function train!(model, dataset::NormalizedDataset, cfg::ScoreTrainerConfig;
-                callback::Function = (_, _) -> nothing,
-                epoch_callback::Function = (_, _, _) -> nothing,
-                device::ExecutionDevice=CPUDevice())
-    
+    callback::Function=(_, _) -> nothing,
+    epoch_callback::Function=(_, _, _) -> nothing,
+    device::ExecutionDevice=CPUDevice())
+
     if device isa GPUDevice && gpu_count(device) > 1
         return train_multi_gpu!(model, dataset, cfg;
-                                callback=callback,
-                                epoch_callback=epoch_callback,
-                                device=device)
+            callback=callback,
+            epoch_callback=epoch_callback,
+            device=device)
     end
-    
+
     return train_single_device!(model, dataset, cfg;
-                                callback=callback,
-                                epoch_callback=epoch_callback,
-                                device=device)
+        callback=callback,
+        epoch_callback=epoch_callback,
+        device=device)
 end
 
 function train_single_device!(model, dataset::NormalizedDataset, cfg::ScoreTrainerConfig;
-                              callback::Function,
-                              epoch_callback::Function,
-                              device::ExecutionDevice)
+    callback::Function,
+    epoch_callback::Function,
+    device::ExecutionDevice)
     n = length(dataset)
     n == 0 && error("Dataset is empty")
     rng = MersenneTwister(cfg.seed)
     thread_rngs = seed_thread_rngs(cfg.seed)
-    
+
     # Ensure we are on the correct device
-    if device isa GPUDevice 
+    if device isa GPUDevice
         CUDA.device!(device.ids[1])
     end
-    
+
     model_on_device = model
     Flux.trainmode!(model_on_device) # Ensure BatchNorm stats are updated
     opt_state = Flux.setup(Flux.Optimisers.Adam(cfg.lr), model_on_device)
@@ -79,17 +80,17 @@ function train_single_device!(model, dataset::NormalizedDataset, cfg::ScoreTrain
     # Gradient accumulation state
     accumulated_grads = nothing
     accum_count = 0
-    
+
     # Pre-allocate CPU buffer for batch data to avoid allocations
     # Dimensions: (Length, Channels, BatchSize)
     L, C, _ = size(dataset.data)
     batch_cpu_buffer = Array{Float32}(undef, L, C, cfg.batch_size)
-    
+
     # Pre-allocate buffers to avoid allocation in loop
     batch_gpu_buffer = nothing
     noise_gpu_buffer = nothing
     noise_cpu_buffer = Array{Float32}(undef, L, C, cfg.batch_size)
-    
+
     if device isa GPUDevice
         batch_gpu_buffer = CUDA.CuArray{Float32}(undef, L, C, cfg.batch_size)
         noise_gpu_buffer = CUDA.CuArray{Float32}(undef, L, C, cfg.batch_size)
@@ -97,12 +98,22 @@ function train_single_device!(model, dataset::NormalizedDataset, cfg::ScoreTrain
 
     for epoch in 1:cfg.epochs
         epoch_t0 = time_ns()
-        idxs = collect(1:n)
-        cfg.shuffle && Random.shuffle!(rng, idxs)
+
+        # Per-epoch random subset selection if epoch_subset_size > 0
+        if cfg.epoch_subset_size > 0 && cfg.epoch_subset_size < n
+            idxs = collect(1:n)
+            Random.shuffle!(rng, idxs)
+            idxs = idxs[1:cfg.epoch_subset_size]
+            # Optionally shuffle the subset order too
+            cfg.shuffle && Random.shuffle!(rng, idxs)
+        else
+            idxs = collect(1:n)
+            cfg.shuffle && Random.shuffle!(rng, idxs)
+        end
         batches = Iterators.partition(idxs, cfg.batch_size)
         step = 0
         accum = 0.0
-        
+
         for batch_idxs in batches
             global_step += 1
             current_batch_size = length(batch_idxs)
@@ -120,7 +131,7 @@ function train_single_device!(model, dataset::NormalizedDataset, cfg::ScoreTrain
                 Threads.@threads for b in 1:current_batch_size
                     idx = batch_idxs[b]
                     @inbounds @simd for i in 1:(L*C)
-                        batch_cpu_buffer[i + (b-1)*L*C] = dataset.data[i + (idx-1)*L*C]
+                        batch_cpu_buffer[i+(b-1)*L*C] = dataset.data[i+(idx-1)*L*C]
                     end
                 end
                 batch_cpu = batch_cpu_buffer
@@ -130,7 +141,7 @@ function train_single_device!(model, dataset::NormalizedDataset, cfg::ScoreTrain
                 Threads.@threads for b in 1:current_batch_size
                     idx = batch_idxs[b]
                     @inbounds @simd for i in 1:(L*C)
-                        batch_view[i + (b-1)*L*C] = dataset.data[i + (idx-1)*L*C]
+                        batch_view[i+(b-1)*L*C] = dataset.data[i+(idx-1)*L*C]
                     end
                 end
                 batch_cpu = batch_view
@@ -138,13 +149,13 @@ function train_single_device!(model, dataset::NormalizedDataset, cfg::ScoreTrain
 
             # Prepare batch and noise on device
             local batch, noise
-            
+
             if device isa GPUDevice
                 # GPU Path: Use pre-allocated buffers
                 batch_view_gpu = view(batch_gpu_buffer, :, :, 1:current_batch_size)
                 CUDA.@allowscalar copyto!(batch_view_gpu, batch_cpu)
                 batch = batch_view_gpu
-                
+
                 noise_view_gpu = view(noise_gpu_buffer, :, :, 1:current_batch_size)
                 CUDA.randn!(noise_view_gpu)
                 noise = noise_view_gpu
@@ -152,13 +163,13 @@ function train_single_device!(model, dataset::NormalizedDataset, cfg::ScoreTrain
                 # CPU Path: Use pre-allocated buffers and threaded noise
                 batch = batch_cpu
                 noise = view(noise_cpu_buffer, :, :, 1:current_batch_size)
-                
+
                 # Threaded noise generation
                 Threads.@threads for b in 1:current_batch_size
                     tid = Threads.threadid()
                     rng_local = thread_rngs[tid]
                     @inbounds @simd for i in 1:(L*C)
-                        noise[i + (b-1)*L*C] = randn(rng_local, Float32)
+                        noise[i+(b-1)*L*C] = randn(rng_local, Float32)
                     end
                 end
             end
@@ -195,7 +206,7 @@ function train_single_device!(model, dataset::NormalizedDataset, cfg::ScoreTrain
 
             # Update parameters every accumulation_steps or at end of epoch
             should_update = (accum_count >= cfg.accumulation_steps) ||
-                           (cfg.max_steps_per_epoch !== nothing && step >= cfg.max_steps_per_epoch)
+                            (cfg.max_steps_per_epoch !== nothing && step >= cfg.max_steps_per_epoch)
 
             if should_update && accumulated_grads !== nothing
                 opt_state, model_on_device = Flux.update!(opt_state, model_on_device, accumulated_grads)
@@ -273,7 +284,7 @@ function split_batch_for_gpus(batch::Array{T,3}, ngpu::Int) where {T}
     for i in 1:ngpu
         s = splits[i]
         if s > 0
-            chunks[i] = Array(batch[:, :, idx:idx + s - 1])
+            chunks[i] = Array(batch[:, :, idx:idx+s-1])
             idx += s
         else
             chunks[i] = Array{T}(undef, L, C, 0)
@@ -301,7 +312,7 @@ function split_batch_for_gpus_views(batch::AbstractArray{T,3}, ngpu::Int) where 
     offset = 0
     for i in 1:ngpu
         count = splits[i]
-        chunks[i] = view(batch, :, :, (offset + 1):(offset + count))
+        chunks[i] = view(batch, :, :, (offset+1):(offset+count))
         offset += count
     end
     return chunks, splits
@@ -371,7 +382,7 @@ function safe_walk(recurse, x, ys...)
 end
 
 function accumulate_gpu_tree_inplace!(dest, src, weight::Float32)
-    Functors.fmap(dest, src; walk = safe_walk) do d, s
+    Functors.fmap(dest, src; walk=safe_walk) do d, s
         if d === nothing
             # If dest is nothing, we only take src if it's numeric/array
             if s isa AbstractArray
@@ -402,7 +413,7 @@ Both trees must already be on their respective GPUs.
 """
 function copy_tree_to_gpu!(dest_tree, src_tree, dest_device_id::Int, src_device_id::Int)
     CUDA.device!(dest_device_id)
-    Functors.fmap(dest_tree, src_tree; walk = safe_walk) do d, s
+    Functors.fmap(dest_tree, src_tree; walk=safe_walk) do d, s
         if s === nothing
             # Source is missing. Zero out destination to represent zero gradient/value.
             if d isa AbstractArray
@@ -450,25 +461,25 @@ end
 # Single-GPU training is now enforced for better performance
 
 function train_multi_gpu!(model, dataset::NormalizedDataset, cfg::ScoreTrainerConfig;
-                          callback::Function,
-                          epoch_callback::Function,
-                          device::GPUDevice)
+    callback::Function,
+    epoch_callback::Function,
+    device::GPUDevice)
     ngpus = length(device.ids)
     n = length(dataset)
     n == 0 && error("Dataset is empty")
-    
+
     # Master device is always the first one
     master_dev = device.ids[1]
     CUDA.device!(master_dev)
-    
+
     # 1. Setup models on all GPUs
     # We maintain a separate model replica on each GPU to avoid constant transfer of weights
     models = Vector{Any}(undef, ngpus)
     models[1] = model # Already on master (or will be ensured)
-    
+
     # Ensure master model is on master device
     models[1] = to_device_tree(models[1], master_dev)
-    
+
     # Replicate to other GPUs
     for i in 2:ngpus
         # We copy from master to device i
@@ -476,37 +487,37 @@ function train_multi_gpu!(model, dataset::NormalizedDataset, cfg::ScoreTrainerCo
         # But deepcopying CUDA arrays across devices is tricky.
         # Easiest: Move to CPU, then to GPU i. But slow.
         # Better: Create structure on GPU i, then copyto!
-        
+
         # Fast path: allocate like tree on device i, then copy
         models[i] = allocate_like_tree(models[1], device.ids[i])
         copy_tree_to_gpu!(models[i], models[1], device.ids[i], master_dev)
     end
-    
+
     # 2. Setup Optimizer (only on master)
     CUDA.device!(master_dev)
     opt_state = Flux.setup(Flux.Optimisers.Adam(cfg.lr), models[1])
-    
+
     # 3. Training State
     epoch_losses = Float32[]
     batch_losses = Float32[]
     steps_per_epoch = ceil(Int, n / cfg.batch_size)
     total_steps = cfg.epochs * steps_per_epoch
     progress = cfg.progress ? Progress(total_steps; desc="Training score network (Multi-GPU)") : nothing
-    
+
     lr_scheduler = cfg.use_lr_schedule ? create_lr_schedule(cfg, steps_per_epoch) : nothing
     global_step = 0
-    
+
     # RNGs for each GPU thread
     # We need a matrix of RNGs: [ngpus]
     # Actually, we spawn threads, so we can just use thread-local RNGs or pass them.
     # Let's create a vector of RNG vectors, one per GPU? 
     # No, just one RNG per GPU is enough for noise generation.
     gpu_rngs = [MersenneTwister(cfg.seed + i) for i in 1:ngpus]
-    
+
     # Pre-allocate CPU buffer
     L, C, _ = size(dataset.data)
     batch_cpu_buffer = Array{Float32}(undef, L, C, cfg.batch_size)
-    
+
     # Pre-allocate transfer buffers on Master to receive gradients from workers
     # This avoids allocating a new tree every step for aggregation
     # We need one buffer per worker (indices 2:ngpus)
@@ -517,29 +528,39 @@ function train_multi_gpu!(model, dataset::NormalizedDataset, cfg::ScoreTrainerCo
 
     for epoch in 1:cfg.epochs
         epoch_t0 = time_ns()
-        idxs = collect(1:n)
-        cfg.shuffle && Random.shuffle!(MersenneTwister(cfg.seed + epoch), idxs)
+        epoch_rng = MersenneTwister(cfg.seed + epoch)
+
+        # Per-epoch random subset selection if epoch_subset_size > 0
+        if cfg.epoch_subset_size > 0 && cfg.epoch_subset_size < n
+            idxs = collect(1:n)
+            Random.shuffle!(epoch_rng, idxs)
+            idxs = idxs[1:cfg.epoch_subset_size]
+            cfg.shuffle && Random.shuffle!(epoch_rng, idxs)
+        else
+            idxs = collect(1:n)
+            cfg.shuffle && Random.shuffle!(epoch_rng, idxs)
+        end
         batches = Iterators.partition(idxs, cfg.batch_size)
         step = 0
         accum = 0.0
-        
+
         for batch_idxs in batches
             global_step += 1
             current_batch_size = length(batch_idxs)
-            
+
             # LR Schedule
             if lr_scheduler !== nothing
                 new_lr = lr_scheduler(global_step)
                 Flux.adjust!(opt_state, new_lr)
             end
-            
+
             # Load data to CPU buffer
             # (Same optimized loading as single-GPU)
             if current_batch_size == cfg.batch_size
                 Threads.@threads for b in 1:current_batch_size
                     idx = batch_idxs[b]
                     @inbounds @simd for i in 1:(L*C)
-                        batch_cpu_buffer[i + (b-1)*L*C] = dataset.data[i + (idx-1)*L*C]
+                        batch_cpu_buffer[i+(b-1)*L*C] = dataset.data[i+(idx-1)*L*C]
                     end
                 end
                 batch_cpu = batch_cpu_buffer
@@ -548,67 +569,67 @@ function train_multi_gpu!(model, dataset::NormalizedDataset, cfg::ScoreTrainerCo
                 Threads.@threads for b in 1:current_batch_size
                     idx = batch_idxs[b]
                     @inbounds @simd for i in 1:(L*C)
-                        batch_view[i + (b-1)*L*C] = dataset.data[i + (idx-1)*L*C]
+                        batch_view[i+(b-1)*L*C] = dataset.data[i+(idx-1)*L*C]
                     end
                 end
                 batch_cpu = batch_view
             end
-            
+
             # Split batch for GPUs
             chunks, counts = split_batch_for_gpus_views(batch_cpu, ngpus)
-            
+
             # Parallel Gradient Computation
             grads_vector = Vector{Any}(undef, ngpus)
             losses_vector = Vector{Float32}(undef, ngpus)
-            
+
             # We use @threads to launch tasks for each GPU
             # Note: Julia threads != GPU streams, but with CUDA.device! it works.
             Threads.@threads for i in 1:ngpus
                 dev_id = device.ids[i]
                 CUDA.device!(dev_id)
-                
+
                 # Move data to GPU
                 # chunks[i] is a CPU view. CUDA.cu copies it.
                 batch_gpu = CUDA.cu(chunks[i])
-                
+
                 # Generate noise
                 # We use a simple randn! on GPU
                 noise = CUDA.randn(size(batch_gpu)...)
                 noisy = batch_gpu .+ cfg.sigma .* noise
-                
+
                 # Compute Gradients
                 # We scale loss by 1/ngpus to average across devices
                 loss, grads = Flux.withgradient(models[i]) do m
                     pred = m(noisy)
                     mse(pred, noise) / ngpus
                 end
-                
+
                 grads_vector[i] = grads[1]
                 losses_vector[i] = loss
             end
-            
+
             # Aggregation on Master
             CUDA.device!(master_dev)
             total_grads = grads_vector[1] # Grads from master
-            
+
             for i in 2:ngpus
                 # Copy grads from worker i to master transfer buffer
                 # This uses P2P if available
                 copy_tree_to_gpu!(transfer_buffers[i], grads_vector[i], master_dev, device.ids[i])
-                
+
                 # Accumulate
                 accumulate_gpu_tree_inplace!(total_grads, transfer_buffers[i], 1.0f0)
             end
-            
+
             # Update Master Model
             Flux.update!(opt_state, models[1], total_grads)
-            
+
             # Broadcast updated weights to workers
             # We can do this in parallel threads too
             Threads.@threads for i in 2:ngpus
                 copy_tree_to_gpu!(models[i], models[1], device.ids[i], master_dev)
             end
-            
+
             # Logging
             avg_loss = sum(losses_vector) # Already scaled by 1/ngpus inside withgradient? 
             # Wait, mse returns mean over batch.
@@ -627,25 +648,25 @@ function train_multi_gpu!(model, dataset::NormalizedDataset, cfg::ScoreTrainerCo
             # In the code above: `mse(pred, noise) / ngpus`. This scales loss and grads by 1/ngpus.
             # So `total_grads` is sum(grads_i / ngpus) = mean(grads). Correct.
             # And `sum(losses_vector)` will be sum(L_i / ngpus) = mean(L). Correct.
-            
+
             loss32 = Float32(avg_loss)
             push!(batch_losses, loss32)
             accum += loss32
             step += 1
-            
+
             progress !== nothing && ProgressMeter.next!(progress; showvalues=[(:epoch, epoch), (:loss, loss32)])
             callback(loss32, epoch)
-            
+
             if cfg.max_steps_per_epoch !== nothing && step >= cfg.max_steps_per_epoch
                 break
             end
         end
-        
+
         push!(epoch_losses, accum / max(step, 1))
         epoch_time = (time_ns() - epoch_t0) / 1e9
         epoch_callback(epoch, models[1], epoch_time)
     end
-    
+
     progress !== nothing && ProgressMeter.finish!(progress)
     return TrainingHistory(epoch_losses, batch_losses)
 end

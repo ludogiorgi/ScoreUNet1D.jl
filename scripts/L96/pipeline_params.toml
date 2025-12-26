@@ -1,0 +1,18 @@
+# ==============================================================================
+# Pipeline Parameters for Two-Scale Lorenz-96 Iterative Training
+# ==============================================================================
+
+[pipeline]
+# Number of train-integrate-plot iterations
+n_iterations = 1
+
+# Where to create run folders
+run_root = "runs/L96"
+
+# Model path in scripts/L96 (updated each iteration)
+model_path = "scripts/L96/trained_model.bson"
+
+# Config file paths (relative to scripts/L96)
+train_config = "train_params.toml"
+integrate_config = "integrate_params.toml"
+plot_config = "plot_params.toml"

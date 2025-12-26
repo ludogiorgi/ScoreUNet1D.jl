@@ -1,0 +1,59 @@
+# ==============================================================================
+# Alpha Tuning Parameters for Kuramoto-Sivashinsky System
+# ==============================================================================
+
+[paths]
+# Path to data
+data_path = "data/KS/new_ks.hdf5"
+
+# Trained model path
+model_path = "runs/KS/trained_model.bson"
+
+# Path to Phi/Sigma file (will be updated with tuned alpha)
+phi_sigma_path = "scripts/KS/phi_sigma.hdf5"
+
+# Output directory for plots
+output_dir = "scripts/KS"
+
+# Dataset key
+dataset_key = "timeseries"
+
+[langevin]
+# Integration time step
+dt = 0.005
+
+# Total steps
+n_steps = 100000
+
+# Burn-in steps
+burn_in = 10000
+
+# Snapshot resolution
+resolution = 200
+
+# Number of ensembles
+n_ensembles = 128
+
+# Use GPU for integration
+use_gpu = true
+
+# Boundary for integration (resets if exceeded)
+boundary_min = -10.0
+boundary_max = 10.0
+
+[optimization]
+# Original data time step (for ACF comparison)
+dt_original = 1.0
+
+# Maximum lag for ACF
+max_lag = 100
+
+# Lag resolution
+lag_res = 1
+
+# Alpha search bounds
+alpha_lower = 0.1
+alpha_upper = 3.0
+
+# Maximum function evaluations
+max_evals = 20

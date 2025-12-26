@@ -1,0 +1,58 @@
+# ==============================================================================
+# Parameters for Phi/Sigma Matrix Estimation (Two-Scale Lorenz-96)
+# ==============================================================================
+
+[paths]
+# Path to the HDF5 dataset (relative to project root)
+data_path = "data/L96/new_l96.hdf5"
+
+# Dataset key and orientation
+dataset_key = "timeseries"
+dataset_orientation = "columns"
+
+# Trained model path
+model_path = "scripts/L96/trained_model.bson"
+
+# Output path for Phi/Sigma matrices (HDF5)
+output_path = "scripts/L96/phi_sigma.hdf5"
+
+[estimation]
+# Noise level (sigma) - should match training sigma
+sigma = 0.1
+
+# Temporal resolution: use every N-th sample
+resolution = 1
+
+# Minimum probability threshold for clustering
+q_min_prob = 1e-4
+
+# Original time step between samples in the dataset (dt * save_stride)
+dt_original = 0.01
+
+# Maximum lag for ACF computation
+max_lag = 50
+
+# Regularization for Cholesky factorization
+regularization = 5e-4
+
+# Resolution for V_data computation (use every N-th sample)
+v_data_resolution = 100
+
+# Batch size for score computation at cluster centers
+
+[output]
+# Save Phi and Sigma matrices to HDF5
+save_matrices = true
+
+# Compute and plot mean ACF comparison (data vs generator)
+plot_acf = false
+
+# Path for ACF comparison plot
+acf_plot_path = "scripts/L96/phi_sigma_acf.png"
+
+[run]
+# Verbose logging
+verbose = true
+
+# Compute device ("CPU", "GPU", "GPU:0", etc.)
+device = "CPU"
