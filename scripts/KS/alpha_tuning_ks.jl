@@ -74,6 +74,7 @@ model_path = resolve_path(get(paths_cfg, "model_path", "runs/KS/trained_model.bs
 phi_sigma_path = resolve_path(get(paths_cfg, "phi_sigma_path", "data/KS/models/model1/phi_sigma.hdf5"), PROJECT_ROOT)
 output_dir = resolve_path(get(paths_cfg, "output_dir", joinpath(SCRIPT_DIR)), PROJECT_ROOT)
 dataset_key = get(paths_cfg, "dataset_key", "timeseries")
+ensure_dir(output_dir)
 
 # Langevin parameters
 dt = Float64(get(langevin_cfg, "dt", 0.0025))

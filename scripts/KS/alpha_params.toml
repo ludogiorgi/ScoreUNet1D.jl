@@ -13,7 +13,7 @@ model_path = "runs/KS/trained_model.bson"
 phi_sigma_path = "scripts/KS/phi_sigma.hdf5"
 
 # Output directory for plots
-output_dir = "scripts/KS"
+output_dir = "figures/KS"
 
 # Dataset key
 dataset_key = "timeseries"

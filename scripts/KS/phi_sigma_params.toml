@@ -57,7 +57,10 @@ save_matrices = true
 plot_acf = false
 
 # Path for ACF comparison plot
-acf_plot_path = "scripts/KS/phi_sigma_acf.png"
+acf_plot_path = "figures/KS/phi_sigma_acf.png"
+
+# Path for matrix heatmaps (Φ, Φ_S, Φ_A, Σ, V_data)
+heatmap_plot_path = "figures/KS/phi_sigma_heatmaps.png"
 
 [run]
 # Verbose logging

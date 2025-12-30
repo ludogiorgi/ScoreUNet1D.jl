@@ -190,6 +190,8 @@ function plot_publication_figure(config_path::AbstractString;
     acf_max_time = Float64(get(figure_cfg, "acf_max_time", 100.0))
     smooth_window = Int(get(figure_cfg, "smooth_window", 2))
 
+    @info "Figure font settings" font_family=font_family title_size=title_size label_size=label_size tick_size=tick_size legend_size=legend_size
+
     # Load trajectories
     @info "Loading trajectories"
     h5_id = load_trajectory_h5(identity_h5)
@@ -265,18 +267,18 @@ function plot_publication_figure(config_path::AbstractString;
 
     fig = Figure(size=(1500, 2100), font=font_family)
 
-    ax_hm_lang = Axis(fig[1, 1]; title="Langevin snapshots", xlabel="t (first $n_hm)", ylabel="mode",
+    ax_hm_lang = Axis(fig[1, 1]; title=L"\textrm{Langevin snapshots}", xlabel="t (first $n_hm)", ylabel="mode",
         titlesize=title_size, xlabelsize=label_size, ylabelsize=label_size,
         xticklabelsize=tick_size, yticklabelsize=tick_size)
     heatmap!(ax_hm_lang, 1:n_hm, 1:L, heatmap_langevin'; colormap=colormap_heatmap, colorrange=(-heat_range, heat_range))
 
-    ax_hm_data = Axis(fig[1, 2]; title="Data snapshots", xlabel="t (first $n_hm)", ylabel="mode",
+    ax_hm_data = Axis(fig[1, 2]; title=L"\textrm{Data snapshots}", xlabel="t (first $n_hm)", ylabel="mode",
         titlesize=title_size, xlabelsize=label_size, ylabelsize=label_size,
         xticklabelsize=tick_size, yticklabelsize=tick_size)
     hm_data = heatmap!(ax_hm_data, 1:n_hm, 1:L, heatmap_data'; colormap=colormap_heatmap, colorrange=(-heat_range, heat_range))
-    Colorbar(fig[1, 3], hm_data; label="value", width=12, labelsize=label_size, ticklabelsize=tick_size)
+    Colorbar(fig[1, 3], hm_data; label="value", width=24, labelsize=label_size, ticklabelsize=tick_size)
 
-    ax_pdf = Axis(fig[2, 1]; title="Univariate PDF", xlabel="value", ylabel="density",
+    ax_pdf = Axis(fig[2, 1]; title=L"\textrm{Univariate PDF}", xlabel="value", ylabel="density",
         titlesize=title_size, xlabelsize=label_size, ylabelsize=label_size,
         xticklabelsize=tick_size, yticklabelsize=tick_size)
     lines!(ax_pdf, pdf_x, pdf_data; color=:black, linewidth=3.0, label="Data")
@@ -284,7 +286,7 @@ function plot_publication_figure(config_path::AbstractString;
     ylims!(ax_pdf, 0, maximum(vcat(pdf_data, pdf_langevin)) * 1.05)
     axislegend(ax_pdf, position=:rt, framevisible=false, labelsize=legend_size)
 
-    ax_acf = Axis(fig[2, 2]; title="Average ACF", xlabel="lag (time units)", ylabel="ACF",
+    ax_acf = Axis(fig[2, 2]; title=L"\textrm{Average ACF}", xlabel="lag (time units)", ylabel="ACF",
         titlesize=title_size, xlabelsize=label_size, ylabelsize=label_size,
         xticklabelsize=tick_size, yticklabelsize=tick_size)
     lines!(ax_acf, lags_data[mask_data], acf_data[mask_data]; color=:black, linewidth=3.0, label="Data")
@@ -305,12 +307,12 @@ function plot_publication_figure(config_path::AbstractString;
     for (row, offset) in enumerate(biv_offsets_sorted)
         spec = bivariate_specs[offset]
 
-        ax_l = Axis(fig[row+2, 1]; title="Bivariate PDF (Langevin)", xlabel="x[i]", ylabel="x[i+$offset]",
+        ax_l = Axis(fig[row+2, 1]; title=L"\textrm{Bivariate PDF (Langevin)}", xlabel="x[i]", ylabel="x[i+$offset]",
             titlesize=title_size, xlabelsize=label_size, ylabelsize=label_size,
             xticklabelsize=tick_size, yticklabelsize=tick_size)
         heatmap!(ax_l, spec.x, spec.y, spec.langevin; colormap=colormap_bivariate, colorrange=(0, biv_density_max))
 
-        ax_r = Axis(fig[row+2, 2]; title="Bivariate PDF (Data)", xlabel="x[i]", ylabel="x[i+$offset]",
+        ax_r = Axis(fig[row+2, 2]; title=L"\textrm{Bivariate PDF (Data)}", xlabel="x[i]", ylabel="x[i+$offset]",
             titlesize=title_size, xlabelsize=label_size, ylabelsize=label_size,
             xticklabelsize=tick_size, yticklabelsize=tick_size)
         hm_r = heatmap!(ax_r, spec.x, spec.y, spec.data; colormap=colormap_bivariate, colorrange=(0, biv_density_max))
@@ -319,7 +321,7 @@ function plot_publication_figure(config_path::AbstractString;
 
     if hm_biv_ref !== nothing
         Colorbar(fig[3:(2+length(biv_offsets_sorted)), 3], hm_biv_ref;
-            label="density", width=12, labelsize=label_size, ticklabelsize=tick_size)
+            label="density", width=24, labelsize=label_size, ticklabelsize=tick_size)
     end
 
     ensure_dir(output_dir)
@@ -340,20 +342,20 @@ function plot_publication_figure(config_path::AbstractString;
 
     fig_h = Figure(size=(3300, 1100), font=font_family)
 
-    ax_hm_lang_h = Axis(fig_h[1, 1]; title="Langevin snapshots", xlabel="t (first $n_hm)", ylabel="mode",
+    ax_hm_lang_h = Axis(fig_h[1, 1]; title=L"\textrm{Langevin snapshots}", xlabel="t (first $n_hm)", ylabel="mode",
         titlesize=title_size, xlabelsize=label_size, ylabelsize=label_size,
         xticklabelsize=tick_size, yticklabelsize=tick_size)
     hm_snap = heatmap!(ax_hm_lang_h, 1:n_hm, 1:L, heatmap_langevin'; colormap=colormap_heatmap, colorrange=(-heat_range, heat_range))
 
-    ax_hm_data_h = Axis(fig_h[2, 1]; title="Data snapshots", xlabel="t (first $n_hm)", ylabel="mode",
+    ax_hm_data_h = Axis(fig_h[2, 1]; title=L"\textrm{Data snapshots}", xlabel="t (first $n_hm)", ylabel="mode",
         titlesize=title_size, xlabelsize=label_size, ylabelsize=label_size,
         xticklabelsize=tick_size, yticklabelsize=tick_size)
     heatmap!(ax_hm_data_h, 1:n_hm, 1:L, heatmap_data'; colormap=colormap_heatmap, colorrange=(-heat_range, heat_range))
 
     # Single shared colorbar for the snapshots column.
-    Colorbar(fig_h[1:2, 2], hm_snap; label="value", width=12, labelsize=label_size, ticklabelsize=tick_size)
+    Colorbar(fig_h[1:2, 2], hm_snap; label="value", width=24, labelsize=label_size, ticklabelsize=tick_size)
 
-    ax_pdf_h = Axis(fig_h[1, 3]; title="Univariate PDF", xlabel="value", ylabel="density",
+    ax_pdf_h = Axis(fig_h[1, 3]; title=L"\textrm{PDFs}", xlabel="value", ylabel="density",
         titlesize=title_size, xlabelsize=label_size, ylabelsize=label_size,
         xticklabelsize=tick_size, yticklabelsize=tick_size)
     lines!(ax_pdf_h, pdf_x, pdf_data; color=:black, linewidth=3.0, label="Data")
@@ -361,7 +363,7 @@ function plot_publication_figure(config_path::AbstractString;
     ylims!(ax_pdf_h, 0, maximum(vcat(pdf_data, pdf_langevin)) * 1.05)
     axislegend(ax_pdf_h, position=:rt, framevisible=false, labelsize=legend_size)
 
-    ax_acf_h = Axis(fig_h[2, 3]; title="Average ACF", xlabel="lag (time units)", ylabel="ACF",
+    ax_acf_h = Axis(fig_h[2, 3]; title=L"\textrm{ACFs}", xlabel="lag (time units)", ylabel="ACF",
         titlesize=title_size, xlabelsize=label_size, ylabelsize=label_size,
         xticklabelsize=tick_size, yticklabelsize=tick_size)
     lines!(ax_acf_h, lags_data[mask_data], acf_data[mask_data]; color=:black, linewidth=3.0, label="Data")
@@ -375,13 +377,13 @@ function plot_publication_figure(config_path::AbstractString;
     for (col_offset, offset) in enumerate(offsets_h)
         spec = bivariate_specs[offset]
 
-        ax_biv_lang = Axis(fig_h[1, 3 + col_offset]; title="Bivariate PDF (Langevin)", xlabel="x[i]", ylabel="x[i+$offset]",
+        ax_biv_lang = Axis(fig_h[1, 3 + col_offset]; title=L"\textrm{Langevin PDF}", xlabel="x[i]", ylabel="x[i+$offset]",
             titlesize=title_size, xlabelsize=label_size, ylabelsize=label_size,
             xticklabelsize=tick_size, yticklabelsize=tick_size)
         hm_lang = heatmap!(ax_biv_lang, spec.x, spec.y, spec.langevin; colormap=colormap_bivariate, colorrange=(0, biv_density_max))
         hm_biv_ref_h === nothing && (hm_biv_ref_h = hm_lang)
 
-        ax_biv_data = Axis(fig_h[2, 3 + col_offset]; title="Bivariate PDF (Data)", xlabel="x[i]", ylabel="x[i+$offset]",
+        ax_biv_data = Axis(fig_h[2, 3 + col_offset]; title=L"\textrm{Data PDF}", xlabel="x[i]", ylabel="x[i+$offset]",
             titlesize=title_size, xlabelsize=label_size, ylabelsize=label_size,
             xticklabelsize=tick_size, yticklabelsize=tick_size)
         heatmap!(ax_biv_data, spec.x, spec.y, spec.data; colormap=colormap_bivariate, colorrange=(0, biv_density_max))
@@ -390,7 +392,7 @@ function plot_publication_figure(config_path::AbstractString;
     if hm_biv_ref_h !== nothing
         # Place the shared bivariate colorbar after the last bivariate column.
         Colorbar(fig_h[1:2, 4 + length(offsets_h)], hm_biv_ref_h;
-            label="density", width=12, labelsize=label_size, ticklabelsize=tick_size)
+            label="density", width=24, labelsize=label_size, ticklabelsize=tick_size)
     end
 
     horizontal_path = joinpath(output_dir, "publication_figure_horizontal.png")
@@ -431,32 +433,32 @@ function plot_publication_figure(config_path::AbstractString;
 
             fig_m = Figure(size=(3000, 520), font=font_family)
 
-            ax1 = Axis(fig_m[1, 1]; title="Φ", xlabel="col", ylabel="row",
+            ax1 = Axis(fig_m[1, 1]; title=L"\Phi", xlabel="col", ylabel="row",
                 titlesize=title_size, xlabelsize=label_size, ylabelsize=label_size,
                 xticklabelsize=tick_size, yticklabelsize=tick_size)
             heatmap!(ax1, Phi_mat; colormap=colormap_heatmap, colorrange=(-clim_all, clim_all))
 
-            ax2 = Axis(fig_m[1, 2]; title="Φ_S", xlabel="col", ylabel="row",
+            ax2 = Axis(fig_m[1, 2]; title=L"\Phi_S", xlabel="col", ylabel="row",
                 titlesize=title_size, xlabelsize=label_size, ylabelsize=label_size,
                 xticklabelsize=tick_size, yticklabelsize=tick_size)
             heatmap!(ax2, Phi_S; colormap=colormap_heatmap, colorrange=(-clim_all, clim_all))
 
-            ax3 = Axis(fig_m[1, 3]; title="Φ_A", xlabel="col", ylabel="row",
+            ax3 = Axis(fig_m[1, 3]; title=L"\Phi_A", xlabel="col", ylabel="row",
                 titlesize=title_size, xlabelsize=label_size, ylabelsize=label_size,
                 xticklabelsize=tick_size, yticklabelsize=tick_size)
             heatmap!(ax3, Phi_A; colormap=colormap_heatmap, colorrange=(-clim_all, clim_all))
 
-            ax4 = Axis(fig_m[1, 4]; title="Σ", xlabel="col", ylabel="row",
+            ax4 = Axis(fig_m[1, 4]; title=L"\Sigma", xlabel="col", ylabel="row",
                 titlesize=title_size, xlabelsize=label_size, ylabelsize=label_size,
                 xticklabelsize=tick_size, yticklabelsize=tick_size)
             heatmap!(ax4, Sigma_mat; colormap=colormap_heatmap, colorrange=(-clim_all, clim_all))
 
-            ax5 = Axis(fig_m[1, 5]; title="<s(x)x^T>", xlabel="col", ylabel="row",
+            ax5 = Axis(fig_m[1, 5]; title=L"\langle s(x)x^T \rangle", xlabel="col", ylabel="row",
                 titlesize=title_size, xlabelsize=label_size, ylabelsize=label_size,
                 xticklabelsize=tick_size, yticklabelsize=tick_size)
             hm_v = heatmap!(ax5, V_data; colormap=colormap_heatmap, colorrange=(-clim_all, clim_all))
 
-            Colorbar(fig_m[1, 6], hm_v; label="value", width=12, labelsize=label_size, ticklabelsize=tick_size)
+            Colorbar(fig_m[1, 6], hm_v; label="value", width=24, labelsize=label_size, ticklabelsize=tick_size)
 
             matrices_path = joinpath(output_dir, "publication_matrices_row.png")
             save(matrices_path, fig_m; px_per_unit=1)

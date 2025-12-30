@@ -13,7 +13,7 @@ model_path = "scripts/L96/trained_model.bson"
 phi_sigma_path = "scripts/L96/phi_sigma.hdf5"
 
 # Output directory for plots
-output_dir = "scripts/L96"
+output_dir = "figures/L96"
 
 # Dataset key
 dataset_key = "timeseries"

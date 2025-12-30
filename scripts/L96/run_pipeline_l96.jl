@@ -38,6 +38,7 @@ CairoMakie.activate!()
 const SCRIPT_DIR = @__DIR__
 const PROJECT_ROOT = normpath(joinpath(SCRIPT_DIR, "..", ".."))
 const PIPELINE_CONFIG = joinpath(SCRIPT_DIR, "pipeline_params.toml")
+const FIGURES_ROOT = joinpath(PROJECT_ROOT, "figures", "L96")
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Helper Functions
@@ -124,6 +125,10 @@ plot_config = joinpath(SCRIPT_DIR, get(pipeline, "plot_config", "plot_params.tom
 # Create main run folder for this pipeline execution
 run_dir = create_run_folder(run_root)
 @info "Created run folder" path = run_dir
+mkpath(FIGURES_ROOT)
+figure_run_dir = joinpath(FIGURES_ROOT, basename(run_dir))
+mkpath(figure_run_dir)
+@info "Figure output folder" path = figure_run_dir
 
 # Track entropy across iterations
 entropy_history = Float64[]
@@ -145,6 +150,8 @@ for iter in 1:n_iterations
 
     iter_dir = joinpath(run_dir, "iter_$(lpad(iter, 2, '0'))")
     mkpath(iter_dir)
+    fig_iter_dir = joinpath(figure_run_dir, basename(iter_dir))
+    mkpath(fig_iter_dir)
 
     # ─────────────────────────────────────────────────────────────────────
     # 1. TRAIN
@@ -169,7 +176,7 @@ for iter in 1:n_iterations
     @info "Model saved" iter_path = model_iter_path scripts_path = model_path_scripts
 
     # Plot losses
-    loss_fig_path = joinpath(iter_dir, "training_loss.png")
+    loss_fig_path = joinpath(fig_iter_dir, "training_loss.png")
     plot_losses(train_result.history.epoch_losses, loss_fig_path)
     @info "Loss plot saved" path = loss_fig_path
 
@@ -199,7 +206,7 @@ for iter in 1:n_iterations
     # ─────────────────────────────────────────────────────────────────────
     @info "Generating comparison figure..."
 
-    fig_path = joinpath(iter_dir, "comparison.png")
+    fig_path = joinpath(fig_iter_dir, "comparison.png")
     plot_comparison_figure(stats, fig_path)
     @info "Comparison figure saved" path = fig_path
 
@@ -230,7 +237,7 @@ end
 @info "PIPELINE COMPLETE"
 @info "="^60
 
-entropy_fig_path = joinpath(run_dir, "entropy_history.png")
+entropy_fig_path = joinpath(figure_run_dir, "entropy_history.png")
 plot_entropy_history(entropy_history, entropy_fig_path)
 @info "Entropy history plot saved" path = entropy_fig_path
 

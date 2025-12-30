@@ -8,15 +8,15 @@ identity_h5 = "plot_data/KS/trajectory_identity.hdf5"
 phi_sigma_h5 = "plot_data/KS/trajectory.hdf5"
 
 # Output directory
-output_dir = "plot_data/KS"
+output_dir = "figures/KS"
 
 [figure]
 # Font settings
 font_family = "TeX Gyre Heros"
-title_size = 28
-label_size = 20
-tick_size = 16
-legend_size = 16
+title_size = 48
+label_size = 36
+tick_size = 30
+legend_size = 30
 
 # Colormaps
 colormap_heatmap = "balance"

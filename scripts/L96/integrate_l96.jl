@@ -15,13 +15,14 @@ using ScoreUNet1D
 
 const CONFIG_PATH = joinpath(@__DIR__, "integrate_params.toml")
 const PROJECT_ROOT = normpath(joinpath(@__DIR__, "..", ".."))
+const FIGURES_DIR = joinpath(PROJECT_ROOT, "figures", "L96")
 
 result = integrate_langevin(CONFIG_PATH; project_root=PROJECT_ROOT)
 
 # Generate comparison figure
 figure_path = plot_comparison_figure(
     result.statistics,
-    joinpath(dirname(result.output_path),
+    joinpath(FIGURES_DIR,
         result.phi_sigma_mode == :identity ? "comparison_identity.png" : "comparison.png")
 )
 

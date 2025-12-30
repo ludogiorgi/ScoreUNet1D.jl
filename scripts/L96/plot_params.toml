@@ -8,7 +8,7 @@ identity_h5 = "plot_data/L96/trajectory_identity.hdf5"
 phi_sigma_h5 = "plot_data/L96/trajectory.hdf5"
 
 # Output directory
-output_dir = "plot_data/L96"
+output_dir = "figures/L96"
 
 [figure]
 # Font settings

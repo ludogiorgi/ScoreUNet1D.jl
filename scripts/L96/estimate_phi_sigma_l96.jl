@@ -49,7 +49,8 @@ v_data_resolution = Int(get(est_cfg, "v_data_resolution", 10))
 # Output options
 save_matrices = get(output_cfg, "save_matrices", true)
 plot_acf = get(output_cfg, "plot_acf", true)
-acf_plot_path = joinpath(PROJECT_ROOT, get(output_cfg, "acf_plot_path", "scripts/L96/phi_sigma_acf.png"))
+acf_plot_path = joinpath(PROJECT_ROOT, get(output_cfg, "acf_plot_path", "figures/L96/phi_sigma_acf.png"))
+plot_acf && ensure_dir(dirname(acf_plot_path))
 
 verbose && @info "Loading model" model_path
 model_contents = BSON.load(model_path)
@@ -199,7 +200,8 @@ fig = plot(p1, p2, p3, p4, p5;
 )
 
 # Save figure
-heatmap_path = joinpath(dirname(output_path), "phi_sigma_heatmaps.png")
+heatmap_path = joinpath(PROJECT_ROOT, get(output_cfg, "heatmap_plot_path", "figures/L96/phi_sigma_heatmaps.png"))
+ensure_dir(dirname(heatmap_path))
 savefig(fig, heatmap_path)
 @info "Matrix heatmaps saved" path = heatmap_path
 
