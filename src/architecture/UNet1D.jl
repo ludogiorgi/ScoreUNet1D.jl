@@ -5,6 +5,7 @@ Configuration container for the 1D Score U-Net.
 """
 Base.@kwdef mutable struct ScoreUNetConfig
     in_channels::Int = 1
+    out_channels::Int = 1
     base_channels::Int = 32
     channel_multipliers::Vector{Int} = [1, 2, 4]
     kernel_size::Int = 5
@@ -60,7 +61,7 @@ function build_unet(cfg::ScoreUNetConfig)
         current = ch
     end
 
-    final_projection = make_conv1d(current, cfg.in_channels;
+    final_projection = make_conv1d(current, cfg.out_channels;
                                    kernel=1,
                                    periodic=cfg.periodic,
                                    activation=identity)

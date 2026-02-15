@@ -246,10 +246,8 @@ function run_langevin(model, dataset::NormalizedDataset, cfg::LangevinConfig,
     # This avoids the overhead of calling integrate_on_device! in a loop
     # and uses cached GPU/CPU state for efficiency.
     #
-    # PERFORMANCE NOTE: We pass boundary=nothing to avoid per-step boundary
-    # checking overhead. The boundary check iterates over all dimensions
-    # every step which is costly for long integrations. If boundary enforcement
-    # is critical, consider a post-processing clamp or sparse checking.
+    # Use boundary enforcement from config to avoid unstable excursions that can
+    # produce NaNs in long integrations.
     traj = EnsembleIntegrator.evolve_sde_snapshots(
         wrapper, x0, Phi, Sigma;
         dt = dt,
@@ -257,7 +255,7 @@ function run_langevin(model, dataset::NormalizedDataset, cfg::LangevinConfig,
         burn_in = burn_in_steps,
         resolution = steps_per_snapshot,
         device = device_str,
-        boundary = nothing,  # Disabled for performance - was cfg.boundary
+        boundary = cfg.boundary,
         progress = cfg.progress,
         progress_desc = "Langevin integration"
     )

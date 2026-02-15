@@ -31,6 +31,13 @@ end
     preds = model(batch)
     @test size(preds) == size(batch)
 
+    cfg_multi = ScoreUNetConfig(in_channels=3, out_channels=5, periodic=false,
+                                base_channels=8, channel_multipliers=[1, 2])
+    model_multi = build_unet(cfg_multi)
+    x_multi = rand(Float32, 64, 3, 4)
+    y_multi = model_multi(x_multi)
+    @test size(y_multi) == (64, 5, 4)
+
     trainer_cfg = ScoreTrainerConfig(epochs=1, batch_size=4, lr=1e-3,
                                      sigma=0.05f0, progress=false,
                                      max_steps_per_epoch=2)

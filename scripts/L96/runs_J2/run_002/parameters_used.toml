@@ -1,0 +1,47 @@
+[run]
+J = 2
+runs_root = "scripts/L96"
+run_folder_prefix = "runs_J"
+run_id_padding = 3
+seed = 7
+
+[data]
+path = "/tmp/l96_timeseries_j2_pipeline.hdf5"
+dataset_key = "timeseries"
+normalization_mode = "split_xy"
+generate_if_missing = true
+
+[train]
+device = "GPU:0"
+num_training_epochs = 20
+batch_size = 128
+lr = 8e-4
+sigma = 0.06
+base_channels = 16
+channel_multipliers = [1, 2]
+progress = false
+
+[train.kl_eval]
+enabled = true
+kl_eval_interval_epochs = 10
+
+[langevin]
+device = "GPU:0"
+dt = 0.005
+resolution = 20
+nsteps = 20_000
+burn_in = 200
+ensembles = 40
+pdf_bins = 60
+use_boundary = true
+boundary_min = -8.0
+boundary_max = 8.0
+
+[figures]
+dpi = 110
+style = "publication"
+
+[output]
+save_checkpoints = true
+checkpoint_every = 10
+save_per_epoch_eval = true

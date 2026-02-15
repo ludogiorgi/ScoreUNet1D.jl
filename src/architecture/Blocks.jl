@@ -146,14 +146,8 @@ Zero padding helper on the spatial dimension.
 """
 function zero_pad(x, left::Integer, right::Integer)
     (left == 0 && right == 0) && return x
-    w, c, b = size(x)
-    out = similar(x, w + left + right, c, b)
-    if left > 0
-        out[1:left, :, :] .= 0
-    end
-    out[left+1:left+w, :, :] .= x
-    if right > 0
-        out[left+w+1:end, :, :] .= 0
-    end
-    return out
+    first_slice = @view x[1:1, :, :]
+    left_pad = left > 0 ? repeat(zero(eltype(x)) .* first_slice, left, 1, 1) : @view x[1:0, :, :]
+    right_pad = right > 0 ? repeat(zero(eltype(x)) .* first_slice, right, 1, 1) : @view x[1:0, :, :]
+    return cat(left_pad, x, right_pad; dims=1)
 end

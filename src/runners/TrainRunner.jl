@@ -68,8 +68,11 @@ end
 function build_model_config(params::Dict{String,Any})
     activation = activation_from_string(get(params, "activation", "swish"))
     final_act = activation_from_string(get(params, "final_activation", "identity"))
+    in_channels = Int(get(params, "in_channels", 1))
+    out_channels = Int(get(params, "out_channels", in_channels))
     cfg = ScoreUNetConfig(
-        in_channels=Int(get(params, "in_channels", 1)),
+        in_channels=in_channels,
+        out_channels=out_channels,
         base_channels=Int(get(params, "base_channels", 32)),
         channel_multipliers=Int.(get(params, "channel_multipliers", [1, 2, 4])),
         kernel_size=Int(get(params, "kernel_size", 5)),
@@ -115,6 +118,7 @@ function adjust_config_for_data(model_config::ScoreUNetConfig, L::Int)
         @warn "Reducing UNet depth" requested = length(model_config.channel_multipliers) max = max_levels
         return ScoreUNetConfig(
             in_channels=model_config.in_channels,
+            out_channels=model_config.out_channels,
             base_channels=model_config.base_channels,
             channel_multipliers=model_config.channel_multipliers[1:max_levels],
             kernel_size=model_config.kernel_size,

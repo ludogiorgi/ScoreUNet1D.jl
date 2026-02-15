@@ -1,0 +1,26 @@
+metrics_txt_path = ""
+eval_config_path = ""
+epoch = 10
+
+[metrics]
+kl_low_q = 0.001
+avg_mode_kl_raw = 0.19059230737165814
+score_pred_mse = 0.6585324175866333
+avg_mode_l1_raw = 0.006889263894482789
+avg_channel_std_abs_error = 0.7136704325675964
+avg_mode_kl_clipped = 0.18908258424267957
+avg_mode_l1_clipped = 0.0068493074631642715
+avg_x_channel_kl_raw = 0.1795204430567258
+score_pred_corr = 0.5824434532794524
+avg_channel_std_rel_error = 0.7136164125768917
+avg_mode_js_clipped = 0.057679615855037926
+max_mode_kl_raw = 0.2552569314684203
+avg_y_channels_kl_raw = 0.19612823952912423
+kl_high_q = 0.999
+avg_x_channel_kl_clipped = 0.17790884928744985
+global_kl_from_run_langevin = 0.12840767670839737
+avg_mode_js_raw = 0.05819740258293505
+avg_y_channels_kl_clipped = 0.19466945172029437
+target_avg_mode_kl = 0.05
+avg_channel_mean_abs_error = 0.4386556148529053
+max_mode_kl_clipped = 0.2546805899754113
