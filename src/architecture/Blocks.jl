@@ -43,13 +43,38 @@ end
 
 Functors.@functor ConvBlock
 
+function _resolve_group_count(channels::Integer, norm_groups::Integer)
+    channels > 0 || throw(ArgumentError("channels must be positive, got $channels"))
+    if norm_groups <= 0
+        for g in (16, 8, 4, 2, 1)
+            channels % g == 0 && return g
+        end
+        return 1
+    end
+    channels % norm_groups == 0 ||
+        throw(ArgumentError("norm_groups=$norm_groups must divide channels=$channels"))
+    return norm_groups
+end
+
+function _make_norm_layer(out_ch::Integer, norm_type::Symbol, norm_groups::Integer)
+    if norm_type == :batch
+        return Flux.BatchNorm(out_ch)
+    elseif norm_type == :group
+        g = _resolve_group_count(out_ch, norm_groups)
+        return Flux.GroupNorm(out_ch, g)
+    else
+        throw(ArgumentError("Unsupported norm_type=$norm_type. Use :batch or :group"))
+    end
+end
+
 function ConvBlock(in_ch::Integer, out_ch::Integer;
                    kernel::Integer=3, periodic::Bool=false,
+                   norm_type::Symbol=:batch, norm_groups::Int=0,
                    activation::Function=Flux.gelu)
     conv1 = make_conv1d(in_ch, out_ch; kernel=kernel, periodic=periodic)
-    bn1 = Flux.BatchNorm(out_ch)
+    bn1 = _make_norm_layer(out_ch, norm_type, norm_groups)
     conv2 = make_conv1d(out_ch, out_ch; kernel=kernel, periodic=periodic)
-    bn2 = Flux.BatchNorm(out_ch)
+    bn2 = _make_norm_layer(out_ch, norm_type, norm_groups)
     return ConvBlock(Chain(conv1, bn1, activation, conv2, bn2, activation))
 end
 
@@ -69,8 +94,14 @@ Functors.@functor DownBlock
 
 function DownBlock(in_ch::Integer, out_ch::Integer;
                    kernel::Integer=3, periodic::Bool=false,
+                   norm_type::Symbol=:batch, norm_groups::Int=0,
                    activation::Function=Flux.gelu)
-    conv = ConvBlock(in_ch, out_ch; kernel=kernel, periodic=periodic, activation=activation)
+    conv = ConvBlock(in_ch, out_ch;
+                     kernel=kernel,
+                     periodic=periodic,
+                     norm_type=norm_type,
+                     norm_groups=norm_groups,
+                     activation=activation)
     down = make_conv1d(out_ch, out_ch; kernel=2, stride=2, periodic=periodic, activation=identity, pad=0)
     return DownBlock(conv, down)
 end
@@ -103,10 +134,15 @@ Functors.@functor UpBlock
 
 function UpBlock(in_ch::Integer, skip_ch::Integer, out_ch::Integer;
                  kernel::Integer=3, periodic::Bool=false,
+                 norm_type::Symbol=:batch, norm_groups::Int=0,
                  activation::Function=Flux.gelu)
     up = Upsample1D(2)
     block = ConvBlock(in_ch + skip_ch, out_ch;
-                      kernel=kernel, periodic=periodic, activation=activation)
+                      kernel=kernel,
+                      periodic=periodic,
+                      norm_type=norm_type,
+                      norm_groups=norm_groups,
+                      activation=activation)
     return UpBlock(up, block)
 end
 

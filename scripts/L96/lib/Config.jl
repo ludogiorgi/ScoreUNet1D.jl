@@ -55,6 +55,7 @@ function load_parameters(path::AbstractString)
 
     run = _as_dict(_require(cfg, "run"), "run")
     data = _as_dict(_require(cfg, "data"), "data")
+    data_gen = haskey(data, "generation") ? _as_dict(data["generation"], "data.generation") : Dict{String,Any}()
     train = _as_dict(_require(cfg, "train"), "train")
     kl_eval = _as_dict(_require(train, "kl_eval"), "train.kl_eval")
     langevin = _as_dict(_require(cfg, "langevin"), "langevin")
@@ -72,9 +73,23 @@ function load_parameters(path::AbstractString)
         "run.seed" => _as_int(_get(run, "seed", 42), "run.seed"),
 
         "data.path" => _as_string(_get(data, "path", "scripts/L96/l96_timeseries.hdf5"), "data.path"),
+        "data.observations_root" => _as_string(_get(data, "observations_root", "scripts/L96/observations"), "data.observations_root"),
+        "data.dataset_filename" => _as_string(_get(data, "dataset_filename", "l96_timeseries.hdf5"), "data.dataset_filename"),
+        "data.integration_params_filename" => _as_string(_get(data, "integration_params_filename", "integration_params.toml"), "data.integration_params_filename"),
         "data.dataset_key" => _as_string(_get(data, "dataset_key", "timeseries"), "data.dataset_key"),
         "data.normalization_mode" => _as_string(_get(data, "normalization_mode", "split_xy"), "data.normalization_mode"),
         "data.generate_if_missing" => _as_bool(_get(data, "generate_if_missing", false), "data.generate_if_missing"),
+        "data.generation.K" => _as_int(_get(data_gen, "K", 36), "data.generation.K"),
+        "data.generation.F" => _as_float(_get(data_gen, "F", 10.0), "data.generation.F"),
+        "data.generation.h" => _as_float(_get(data_gen, "h", 1.0), "data.generation.h"),
+        "data.generation.c" => _as_float(_get(data_gen, "c", 10.0), "data.generation.c"),
+        "data.generation.b" => _as_float(_get(data_gen, "b", 10.0), "data.generation.b"),
+        "data.generation.dt" => _as_float(_get(data_gen, "dt", 0.005), "data.generation.dt"),
+        "data.generation.spinup_steps" => _as_int(_get(data_gen, "spinup_steps", 20_000), "data.generation.spinup_steps"),
+        "data.generation.save_every" => _as_int(_get(data_gen, "save_every", 10), "data.generation.save_every"),
+        "data.generation.nsamples" => _as_int(_get(data_gen, "nsamples", 12_000), "data.generation.nsamples"),
+        "data.generation.process_noise_sigma" => _as_float(_get(data_gen, "process_noise_sigma", 0.03), "data.generation.process_noise_sigma"),
+        "data.generation.rng_seed" => _as_int(_get(data_gen, "rng_seed", _get(run, "seed", 42)), "data.generation.rng_seed"),
 
         "train.device" => _as_string(_get(train, "device", "GPU:0"), "train.device"),
         "train.num_training_epochs" => _as_int(_get(train, "num_training_epochs", 80), "train.num_training_epochs"),
@@ -118,6 +133,12 @@ function validate!(params::Dict{String,Any})
     params["train.batch_size"] >= 1 || error("train.batch_size must be >= 1")
     params["langevin.ensembles"] >= 1 || error("langevin.ensembles must be >= 1")
     params["langevin.nsteps"] > params["langevin.burn_in"] || error("langevin.nsteps must be > langevin.burn_in")
+    params["data.generation.K"] >= 2 || error("data.generation.K must be >= 2")
+    params["data.generation.dt"] > 0 || error("data.generation.dt must be > 0")
+    params["data.generation.spinup_steps"] >= 0 || error("data.generation.spinup_steps must be >= 0")
+    params["data.generation.save_every"] >= 1 || error("data.generation.save_every must be >= 1")
+    params["data.generation.nsamples"] >= 1 || error("data.generation.nsamples must be >= 1")
+    params["data.generation.process_noise_sigma"] >= 0 || error("data.generation.process_noise_sigma must be >= 0")
 
     if params["train.kl_eval.enabled"]
         params["train.kl_eval.kl_eval_interval_epochs"] >= 1 || error("train.kl_eval.kl_eval_interval_epochs must be >= 1")

@@ -1,5 +1,6 @@
 using HDF5
 using Random
+using TOML
 
 include(joinpath(@__DIR__, "run_layout.jl"))
 using .L96RunLayout
@@ -31,6 +32,7 @@ const RUN_DIR = let
 end
 
 const OUTPUT_PATH = get(ENV, "L96_DATA_PATH", L96RunLayout.default_data_path(RUN_DIR))
+const DATASET_PARAMS_TOML_PATH = strip(get(ENV, "L96_DATASET_PARAMS_TOML_PATH", ""))
 
 mod1idx(i::Int, n::Int) = mod(i - 1, n) + 1
 
@@ -171,6 +173,36 @@ function save_dataset(raw::Array{Float32,3})
     return OUTPUT_PATH
 end
 
+function save_dataset_params_toml(raw::Array{Float32,3}, out_path::AbstractString)
+    isempty(DATASET_PARAMS_TOML_PATH) && return ""
+    cfg = Dict{String,Any}(
+        "dataset" => Dict(
+            "key" => "timeseries",
+            "path" => abspath(out_path),
+            "shape" => [size(raw, 1), size(raw, 2), size(raw, 3)],
+        ),
+        "integration" => Dict(
+            "K" => K,
+            "J" => J,
+            "F" => F,
+            "h" => H,
+            "c" => C,
+            "b" => B_PARAM,
+            "dt" => DT,
+            "spinup_steps" => SPINUP_STEPS,
+            "save_every" => SAVE_EVERY,
+            "nsamples" => NSAMPLES,
+            "rng_seed" => RNG_SEED,
+            "process_noise_sigma" => PROCESS_NOISE_SIGMA,
+        ),
+    )
+    mkpath(dirname(DATASET_PARAMS_TOML_PATH))
+    open(DATASET_PARAMS_TOML_PATH, "w") do io
+        TOML.print(io, cfg)
+    end
+    return DATASET_PARAMS_TOML_PATH
+end
+
 function save_generation_config(raw::Array{Float32,3}, out_path::AbstractString)
     PIPELINE_MODE && return ""
 
@@ -202,6 +234,7 @@ end
 
 raw = generate_l96_dataset()
 out_path = save_dataset(raw)
+dataset_params_path = save_dataset_params_toml(raw, out_path)
 config_path = save_generation_config(raw, out_path)
 if !PIPELINE_MODE
     L96RunLayout.ensure_runs_readme!(L96RunLayout.default_runs_root(@__DIR__))
@@ -239,7 +272,7 @@ if !PIPELINE_MODE
     compat_links = L96RunLayout.update_compat_links!(@__DIR__; data_path=out_path)
     L96RunLayout.write_latest_run!(@__DIR__, RUN_DIR)
 
-    @info "L96 dataset saved" path = out_path size = size(raw) run_dir = RUN_DIR config = config_path manifest = manifest_path summary = summary_path run_index = index_paths.index compat_links = compat_links
+    @info "L96 dataset saved" path = out_path size = size(raw) run_dir = RUN_DIR config = config_path dataset_params = dataset_params_path manifest = manifest_path summary = summary_path run_index = index_paths.index compat_links = compat_links
 else
-    @info "L96 dataset saved" path = out_path size = size(raw)
+    @info "L96 dataset saved" path = out_path size = size(raw) dataset_params = dataset_params_path
 end

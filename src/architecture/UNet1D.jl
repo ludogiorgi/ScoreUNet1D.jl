@@ -10,6 +10,8 @@ Base.@kwdef mutable struct ScoreUNetConfig
     channel_multipliers::Vector{Int} = [1, 2, 4]
     kernel_size::Int = 5
     periodic::Bool = false
+    norm_type::Symbol = :batch
+    norm_groups::Int = 0
     activation::Function = Flux.gelu
     final_activation::Function = identity
 end
@@ -41,6 +43,8 @@ function build_unet(cfg::ScoreUNetConfig)
         down_blocks[i] = DownBlock(in_ch, ch;
                                    kernel=cfg.kernel_size,
                                    periodic=cfg.periodic,
+                                   norm_type=cfg.norm_type,
+                                   norm_groups=cfg.norm_groups,
                                    activation=cfg.activation)
         in_ch = ch
     end
@@ -49,6 +53,8 @@ function build_unet(cfg::ScoreUNetConfig)
     bottleneck = ConvBlock(in_ch, bottleneck_channels;
                            kernel=cfg.kernel_size,
                            periodic=cfg.periodic,
+                           norm_type=cfg.norm_type,
+                           norm_groups=cfg.norm_groups,
                            activation=cfg.activation)
 
     up_blocks = Vector{UpBlock}(undef, length(channels))
@@ -57,6 +63,8 @@ function build_unet(cfg::ScoreUNetConfig)
         up_blocks[i] = UpBlock(current, ch, ch;
                                kernel=cfg.kernel_size,
                                periodic=cfg.periodic,
+                               norm_type=cfg.norm_type,
+                               norm_groups=cfg.norm_groups,
                                activation=cfg.activation)
         current = ch
     end

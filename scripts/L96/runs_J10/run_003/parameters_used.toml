@@ -30,10 +30,10 @@ rng_seed = 7
 
 [train]
 device = "GPU:0"
-num_training_epochs = 50
+num_training_epochs = 20
 batch_size = 128
 lr = 8e-4
-sigma = 0.1
+sigma = 0.06
 base_channels = 16
 channel_multipliers = [1, 2]
 progress = false
@@ -46,13 +46,13 @@ kl_eval_interval_epochs = 10
 device = "GPU:0"
 dt = 0.0025
 resolution = 40
-nsteps = 40_000
+nsteps = 100_000
 burn_in = 400
 ensembles = 64
 pdf_bins = 60
 use_boundary = true
-boundary_min = -8.0
-boundary_max = 8.0
+boundary_min = -10.0
+boundary_max = 10.0
 
 [figures]
 dpi = 110

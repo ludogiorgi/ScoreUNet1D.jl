@@ -1,0 +1,80 @@
+run_dir = "/home/ludogio/Documents/JuliaProjects/ScoreUNet1D.jl/scripts/L96/runs_J10/run_002"
+parameters_used_path = "/home/ludogio/Documents/JuliaProjects/ScoreUNet1D.jl/scripts/L96/runs_J10/run_002/parameters_used.toml"
+updated_at = "2026-02-15T20:05:52"
+
+[evaluation]
+num_langevin_evaluations = 5
+epochs = [10, 20, 30, 40, 50]
+best_epoch = 20
+global_kl = [0.10612979278779934, 0.01909516294017703, 0.027790352439964413, 0.030037851076379473, 0.022649028714255504]
+best_avg_mode_kl_clipped = 0.03714878718759983
+avg_mode_kl_clipped = [0.11755210141761814, 0.03714878718759983, 0.042532080453993065, 0.045205104171854756, 0.040400332115441764]
+best_metrics_toml = "/home/ludogio/Documents/JuliaProjects/ScoreUNet1D.jl/scripts/L96/runs_J10/run_002/metrics/epoch_0020_metrics.toml"
+
+[raw_parameters.run]
+J = 10
+run_folder_prefix = "runs_J"
+seed = 7
+run_id_padding = 3
+runs_root = "scripts/L96"
+
+[raw_parameters.langevin]
+resolution = 40
+burn_in = 400
+device = "GPU:0"
+pdf_bins = 60
+boundary_min = -8.0
+nsteps = 40000
+boundary_max = 8.0
+dt = 0.0025
+ensembles = 64
+use_boundary = true
+
+[raw_parameters.output]
+save_per_epoch_eval = true
+save_checkpoints = true
+checkpoint_every = 10
+
+[raw_parameters.data]
+dataset_filename = "l96_timeseries.hdf5"
+integration_params_filename = "integration_params.toml"
+normalization_mode = "split_xy"
+dataset_key = "timeseries"
+generate_if_missing = true
+path = "scripts/L96/observations/J10/l96_timeseries.hdf5"
+observations_root = "scripts/L96/observations"
+
+    [raw_parameters.data.generation]
+    c = 10.0
+    nsamples = 100000
+    b = 10.0
+    dt = 0.005
+    h = 1.0
+    spinup_steps = 20000
+    process_noise_sigma = 0.03
+    rng_seed = 7
+    save_every = 10
+    K = 36
+    F = 10.0
+
+[raw_parameters.train]
+num_training_epochs = 50
+sigma = 0.06
+lr = 0.0008
+channel_multipliers = [1, 2]
+device = "GPU:0"
+progress = false
+batch_size = 128
+base_channels = 16
+
+    [raw_parameters.train.kl_eval]
+    kl_eval_interval_epochs = 10
+    enabled = true
+
+[raw_parameters.figures]
+dpi = 110
+style = "publication"
+
+[training]
+model_path = "/home/ludogio/Documents/JuliaProjects/ScoreUNet1D.jl/scripts/L96/runs_J10/run_002/model/score_model.bson"
+figure_A = "/home/ludogio/Documents/JuliaProjects/ScoreUNet1D.jl/scripts/L96/runs_J10/run_002/figures/training/figA_training_2x1.png"

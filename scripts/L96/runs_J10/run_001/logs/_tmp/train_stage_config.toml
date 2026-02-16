@@ -1,0 +1,47 @@
+run_dir = "/home/ludogio/Documents/JuliaProjects/ScoreUNet1D.jl/scripts/L96/runs_J10/run_001"
+stage = "train_unet"
+
+[trainer]
+epochs = 50
+sigma = 0.05999999865889549
+lr = 0.0008
+use_lr_schedule = true
+min_lr_factor = 0.1
+device = "GPU:0"
+progress = false
+batch_size = 128
+seed = 7
+warmup_steps = 500
+
+[model]
+periodic = true
+channel_multipliers = [1, 2]
+base_channels = 16
+
+[paths]
+model_path = "/home/ludogio/Documents/JuliaProjects/ScoreUNet1D.jl/scripts/L96/runs_J10/run_001/model/score_model.bson"
+train_diag_dir = "/home/ludogio/Documents/JuliaProjects/ScoreUNet1D.jl/scripts/L96/runs_J10/run_001/figures/training"
+data_path = "/home/ludogio/Documents/JuliaProjects/ScoreUNet1D.jl/scripts/L96/observations/J10/l96_timeseries.hdf5"
+checkpoint_dir = "/home/ludogio/Documents/JuliaProjects/ScoreUNet1D.jl/scripts/L96/runs_J10/run_001/logs/_tmp/checkpoints"
+
+[data]
+normalization_mode = "split_xy"
+tensor_shape_lcb = [36, 11, 100000]
+dataset_key = "timeseries"
+
+[eval]
+eval_kl_resolution = 100
+save_checkpoint_every = 10
+eval_batch_size = 256
+eval_kl_high_q = 0.999
+eval_num_samples = 2048
+eval_kl_boundary = true
+eval_kl_burn_in = 1000
+eval_loss_every = 1
+eval_kl_bins = 64
+eval_kl_steps = 4000
+eval_kl_ensembles = 8
+eval_kl_low_q = 0.001
+eval_kl_dt = 0.0005
+eval_kl_seed_base = 1000
+eval_kl_every = 0

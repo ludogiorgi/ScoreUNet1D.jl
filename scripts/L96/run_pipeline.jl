@@ -3,6 +3,8 @@
 # julia --project=. scripts/L96/run_pipeline.jl --params scripts/L96/parameters.toml
 
 using Dates
+using HDF5
+using TOML
 
 include(joinpath(@__DIR__, "lib", "Config.jl"))
 include(joinpath(@__DIR__, "lib", "RunManager.jl"))
@@ -46,7 +48,17 @@ function prune_run_layout!(run_dir::AbstractString, eval_rows::Vector{Dict{Strin
     keep = Set{String}()
 
     push!(keep, abspath(joinpath(run_dir, "parameters_used.toml")))
-    push!(keep, abspath(joinpath(run_dir, "model", "score_model.bson")))
+    model_dir = joinpath(run_dir, "model")
+    if isdir(model_dir)
+        for name in readdir(model_dir)
+            p = abspath(joinpath(model_dir, name))
+            if isfile(p) && endswith(lowercase(name), ".bson")
+                push!(keep, p)
+            end
+        end
+    else
+        push!(keep, abspath(joinpath(run_dir, "model", "score_model.bson")))
+    end
     push!(keep, abspath(joinpath(run_dir, "metrics", "run_summary.toml")))
     push!(keep, abspath(joinpath(run_dir, "logs", "pipeline.log")))
     push!(keep, abspath(joinpath(run_dir, "figures", "training", "figA_training_2x1.png")))
@@ -91,29 +103,138 @@ function prune_training_intermediate!(figures_training_dir::AbstractString, trai
     return nothing
 end
 
-function ensure_data_available!(params::Dict{String,Any}; base_dir::AbstractString=pwd())
-    data_path = abspath(joinpath(base_dir, params["data.path"]))
-    if isfile(data_path)
-        return data_path
+function archive_checkpoint_models!(checkpoint_pairs::Vector{Tuple{Int,String}}, model_dir::AbstractString)
+    mkpath(model_dir)
+    saved = Tuple{Int,String}[]
+    for (epoch, src_path) in checkpoint_pairs
+        isfile(src_path) || continue
+        epoch_tag = lpad(string(epoch), 4, '0')
+        dst = joinpath(model_dir, "score_model_epoch_$(epoch_tag).bson")
+        cp(src_path, dst; force=true)
+        push!(saved, (epoch, dst))
     end
+    sort!(saved; by=x -> x[1])
+    return saved
+end
 
-    # Recover gracefully from legacy/broken symlinks at the configured data path.
-    if islink(data_path) && !isfile(data_path)
-        rm(data_path; force=true)
+function observations_paths(params::Dict{String,Any}; base_dir::AbstractString=pwd())
+    root = abspath(joinpath(base_dir, params["data.observations_root"]))
+    j = Int(params["run.J"])
+    jdir = joinpath(root, "J$(j)")
+    data_path = joinpath(jdir, params["data.dataset_filename"])
+    params_toml = joinpath(jdir, params["data.integration_params_filename"])
+    return Dict(
+        "root" => root,
+        "jdir" => jdir,
+        "data_path" => data_path,
+        "params_toml" => params_toml,
+    )
+end
+
+function dataset_channel_count(path::AbstractString, dataset_key::AbstractString)
+    return h5open(path, "r") do h5
+        haskey(h5, dataset_key) || error("Dataset key '$dataset_key' not found in $path")
+        dset = h5[dataset_key]
+        length(size(dset)) == 3 || error("Expected 3D dataset '$dataset_key' in $path")
+        size(dset, 2)
     end
+end
 
-    if !params["data.generate_if_missing"]
-        error("Data file not found: $data_path. Set [data].generate_if_missing=true or provide existing data.path.")
+function read_dataset_int_attrs(path::AbstractString, dataset_key::AbstractString)
+    return h5open(path, "r") do h5
+        haskey(h5, dataset_key) || error("Dataset key '$dataset_key' not found in $path")
+        dset = h5[dataset_key]
+        attrs = attributes(dset)
+        out = Dict{String,Any}()
+        for k in ("K", "J", "spinup_steps", "save_every")
+            if haskey(attrs, k)
+                out[k] = Int(read(attrs[k]))
+            end
+        end
+        for k in ("F", "h", "c", "b", "dt", "process_noise_sigma")
+            if haskey(attrs, k)
+                out[k] = Float64(read(attrs[k]))
+            end
+        end
+        return out
     end
+end
 
+function write_dataset_params_toml(path::AbstractString, data_path::AbstractString, dataset_key::AbstractString, attrs::Dict{String,Any})
+    mkpath(dirname(path))
+    shape = h5open(data_path, "r") do h5
+        size(h5[dataset_key])
+    end
+    cfg = Dict{String,Any}(
+        "dataset" => Dict(
+            "key" => String(dataset_key),
+            "path" => abspath(data_path),
+            "shape" => [Int(shape[1]), Int(shape[2]), Int(shape[3])],
+        ),
+        "integration" => attrs,
+    )
+    open(path, "w") do io
+        TOML.print(io, cfg)
+    end
+    return path
+end
+
+function generate_observations_dataset!(params::Dict{String,Any}, data_path::AbstractString, params_toml::AbstractString)
     env = copy(ENV)
     env["L96_J"] = string(params["run.J"])
+    env["L96_K"] = string(params["data.generation.K"])
+    env["L96_F"] = string(params["data.generation.F"])
+    env["L96_H"] = string(params["data.generation.h"])
+    env["L96_C"] = string(params["data.generation.c"])
+    env["L96_B"] = string(params["data.generation.b"])
+    env["L96_DT"] = string(params["data.generation.dt"])
+    env["L96_SPINUP_STEPS"] = string(params["data.generation.spinup_steps"])
+    env["L96_SAVE_EVERY"] = string(params["data.generation.save_every"])
+    env["L96_NSAMPLES"] = string(params["data.generation.nsamples"])
+    env["L96_PROCESS_NOISE_SIGMA"] = string(params["data.generation.process_noise_sigma"])
+    env["L96_RNG_SEED"] = string(params["data.generation.rng_seed"])
     env["L96_DATA_PATH"] = data_path
-    env["L96_RNG_SEED"] = string(params["run.seed"])
+    env["L96_DATASET_PARAMS_TOML_PATH"] = params_toml
     env["L96_PIPELINE_MODE"] = "true"
     cmd = setenv(`julia --project=. scripts/L96/lib/generate_data.jl`, env)
     run(cmd)
     isfile(data_path) || error("Failed generating data at $data_path")
+    return data_path
+end
+
+function ensure_data_available!(params::Dict{String,Any}; base_dir::AbstractString=pwd())
+    paths = observations_paths(params; base_dir=base_dir)
+    data_path = paths["data_path"]
+    params_toml = paths["params_toml"]
+    mkpath(paths["jdir"])
+
+    dataset_key = params["data.dataset_key"]
+    expected_channels = Int(params["run.J"]) + 1
+
+    if isfile(data_path)
+        nch = dataset_channel_count(data_path, dataset_key)
+        if nch != expected_channels
+            if !params["data.generate_if_missing"]
+                error("Existing dataset $data_path has $nch channels but expected $expected_channels for J=$(params["run.J"]).")
+            end
+            rm(data_path; force=true)
+        end
+    elseif islink(data_path) && !isfile(data_path)
+        rm(data_path; force=true)
+    end
+
+    if !isfile(data_path)
+        if !params["data.generate_if_missing"]
+            error("Dataset not found for J=$(params["run.J"]) at $data_path and generation is disabled.")
+        end
+        generate_observations_dataset!(params, data_path, params_toml)
+    elseif !isfile(params_toml)
+        attrs = read_dataset_int_attrs(data_path, dataset_key)
+        write_dataset_params_toml(params_toml, data_path, dataset_key, attrs)
+    end
+
+    # Force downstream stages to use the J-indexed observation dataset.
+    params["data.path"] = data_path
     return data_path
 end
 
@@ -132,6 +253,9 @@ function main(args=ARGS)
 
     data_path = ensure_data_available!(params; base_dir=pwd())
     append_log(log_path, "data_path=$data_path")
+    obs_paths = observations_paths(params; base_dir=pwd())
+    append_log(log_path, "observations_dir=$(obs_paths["jdir"])")
+    append_log(log_path, "integration_params_toml=$(obs_paths["params_toml"])")
 
     training = L96TrainStage.run_training!(params, Dict{String,String}(k => String(v) for (k, v) in dirs); base_dir=pwd())
     prune_training_intermediate!(dirs["figures_training"], training["training_metrics_csv"])
@@ -139,6 +263,10 @@ function main(args=ARGS)
     eval_rows = Dict{String,Any}[]
     eval_enabled = params["train.kl_eval.enabled"]
     ckpts = L96TrainStage.list_checkpoints(training["checkpoint_dir"])
+    archived_ckpts = archive_checkpoint_models!(ckpts, dirs["model"])
+    for (epoch, path) in archived_ckpts
+        append_log(log_path, "[train] archived_checkpoint epoch=$epoch path=$(abspath(path))")
+    end
 
     if eval_enabled
         isempty(ckpts) && error("No checkpoints found for KL evaluation. Check training checkpoint interval.")

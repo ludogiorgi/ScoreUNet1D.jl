@@ -1,0 +1,18 @@
+[integration]
+c = 10.0
+nsamples = 100000
+b = 10.0
+dt = 0.005
+h = 1.0
+spinup_steps = 20000
+process_noise_sigma = 0.03
+rng_seed = 7
+J = 10
+save_every = 10
+K = 36
+F = 10.0
+
+[dataset]
+key = "timeseries"
+shape = [100000, 11, 36]
+path = "/home/ludogio/Documents/JuliaProjects/ScoreUNet1D.jl/scripts/L96/observations/J10/l96_timeseries.hdf5"

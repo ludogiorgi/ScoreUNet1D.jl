@@ -19,7 +19,7 @@ sample_length(dataset::NormalizedDataset) = size(dataset.data, 1)
 num_channels(dataset::NormalizedDataset) = size(dataset.data, 2)
 
 """
-    load_hdf5_dataset(path; dataset_key=nothing, normalize=true, samples_orientation=:rows, stride=1)
+    load_hdf5_dataset(path; dataset_key=nothing, normalize=true, samples_orientation=:rows, stride=1, normalize_mode=:per_feature)
 
 Loads the dataset stored in `data/` as an HDF5 tensor, reshapes it to
 `(length, channels, batch)`, and optionally normalizes it. Set
@@ -31,13 +31,14 @@ function load_hdf5_dataset(path::AbstractString;
                            dataset_key::Union{Nothing,String}=nothing,
                            normalize::Bool=true,
                            samples_orientation::Symbol=:rows,
-                           stride::Integer=1)
+                           stride::Integer=1,
+                           normalize_mode::Symbol=:per_feature)
     raw = read_hdf5_array(path, dataset_key)
     raw = orient_samples(raw, samples_orientation)
     tensor = ensure_tensor_layout(raw)
     tensor = apply_stride(tensor, stride)
     tensor = Array{Float32,3}(tensor)
-    return normalize ? normalize_dataset(tensor) :
+    return normalize ? normalize_dataset(tensor; normalize_mode=normalize_mode) :
         NormalizedDataset(tensor,
                           DataStats(zeros(Float32, size(tensor,2), size(tensor,1)),
                                     ones(Float32, size(tensor,2), size(tensor,1))))
@@ -116,28 +117,75 @@ function ensure_tensor_layout(data::AbstractArray)
 end
 
 """
-    normalize_dataset(tensor)
+    normalize_dataset(tensor; normalize_mode=:per_feature)
 
 Normalizes a `(length, channels, batch)` tensor and returns a `NormalizedDataset`.
 """
-function normalize_dataset(tensor::Array{Float32,3})
-    stats = compute_stats(tensor)
+function normalize_dataset(tensor::Array{Float32,3}; normalize_mode::Symbol=:per_feature)
+    stats = compute_stats(tensor; normalize_mode=normalize_mode)
     normalized = apply_stats(tensor, stats)
     return NormalizedDataset(normalized, stats)
 end
 
 """
-    compute_stats(tensor)
+    compute_stats(tensor; normalize_mode=:per_feature)
 
-Computes per-feature mean and std using CPU threads.
+Computes normalization statistics for the selected mode:
+- `:per_feature`: independent stats for each `(channel, length)` entry.
+- `:per_channel`: one stat per channel pooled over `(length, batch)`.
+- `:l96_grouped`: channel 1 uses its own pooled stat, channels `2:C` share a pooled stat.
 """
-function compute_stats(tensor::Array{Float32,3})
-    L, C, B = size(tensor)
-    flat = reshape(permutedims(tensor, (3, 2, 1)), B, :)
-    means, stds = feature_stats(flat)
-    mean_tensor = reshape(means, C, L)
-    std_tensor = reshape(stds, C, L)
-    return DataStats(mean_tensor, std_tensor)
+function compute_stats(tensor::Array{Float32,3}; normalize_mode::Symbol=:per_feature)
+    normalize_mode in (:per_feature, :per_channel, :l96_grouped) ||
+        throw(ArgumentError("Unsupported normalize_mode=$normalize_mode"))
+
+    L, C, _ = size(tensor)
+
+    if normalize_mode == :per_feature
+        _, _, B = size(tensor)
+        flat = reshape(permutedims(tensor, (3, 2, 1)), B, :)
+        means, stds = feature_stats(flat)
+        mean_tensor = reshape(means, C, L)
+        std_tensor = reshape(stds, C, L)
+        return DataStats(mean_tensor, std_tensor)
+    elseif normalize_mode == :per_channel
+        mean_tensor = Array{Float32}(undef, C, L)
+        std_tensor = Array{Float32}(undef, C, L)
+        Threads.@threads for c in 1:C
+            vals = @view tensor[:, c, :]
+            μ = Float32(mean(vals))
+            σ = Float32(std(vals) + eps(Float32))
+            @inbounds begin
+                mean_tensor[c, :] .= μ
+                std_tensor[c, :] .= σ
+            end
+        end
+        return DataStats(mean_tensor, std_tensor)
+    else # :l96_grouped
+        mean_tensor = Array{Float32}(undef, C, L)
+        std_tensor = Array{Float32}(undef, C, L)
+
+        vals_x = @view tensor[:, 1, :]
+        μx = Float32(mean(vals_x))
+        σx = Float32(std(vals_x) + eps(Float32))
+        @inbounds begin
+            mean_tensor[1, :] .= μx
+            std_tensor[1, :] .= σx
+        end
+
+        if C == 1
+            return DataStats(mean_tensor, std_tensor)
+        end
+
+        vals_y = @view tensor[:, 2:C, :]
+        μy = Float32(mean(vals_y))
+        σy = Float32(std(vals_y) + eps(Float32))
+        @inbounds for c in 2:C
+            mean_tensor[c, :] .= μy
+            std_tensor[c, :] .= σy
+        end
+        return DataStats(mean_tensor, std_tensor)
+    end
 end
 
 function feature_stats(flat::Array{Float32,2})

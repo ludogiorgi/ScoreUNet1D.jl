@@ -70,6 +70,10 @@ function build_model_config(params::Dict{String,Any})
     final_act = activation_from_string(get(params, "final_activation", "identity"))
     in_channels = Int(get(params, "in_channels", 1))
     out_channels = Int(get(params, "out_channels", in_channels))
+    norm_type_raw = get(params, "norm_type", "batch")
+    norm_type = norm_type_raw isa Symbol ? norm_type_raw : symbol_from_string(String(norm_type_raw))
+    norm_type in (:batch, :group) || error("Unsupported model.norm_type=$norm_type. Use 'batch' or 'group'.")
+    norm_groups = Int(get(params, "norm_groups", 0))
     cfg = ScoreUNetConfig(
         in_channels=in_channels,
         out_channels=out_channels,
@@ -77,6 +81,8 @@ function build_model_config(params::Dict{String,Any})
         channel_multipliers=Int.(get(params, "channel_multipliers", [1, 2, 4])),
         kernel_size=Int(get(params, "kernel_size", 5)),
         periodic=get(params, "periodic", false),
+        norm_type=norm_type,
+        norm_groups=norm_groups,
         activation=activation,
         final_activation=final_act,
     )
@@ -123,6 +129,8 @@ function adjust_config_for_data(model_config::ScoreUNetConfig, L::Int)
             channel_multipliers=model_config.channel_multipliers[1:max_levels],
             kernel_size=model_config.kernel_size,
             periodic=model_config.periodic,
+            norm_type=model_config.norm_type,
+            norm_groups=model_config.norm_groups,
             activation=model_config.activation,
             final_activation=model_config.final_activation,
         )
@@ -148,8 +156,8 @@ Train a score network using configuration from a TOML file.
 - `TrainingResult` with trained model and metadata
 
 # Config Sections
-- `[data]`: path, dataset_key, samples_orientation, train_samples, subset_seed
-- `[model]`: in_channels, base_channels, channel_multipliers, kernel_size, etc.
+- `[data]`: path, dataset_key, samples_orientation, normalize_mode, train_samples, subset_seed
+- `[model]`: in_channels, base_channels, channel_multipliers, kernel_size, periodic, norm_type, norm_groups, etc.
 - `[training]`: epochs, batch_size, lr, sigma, etc.
 - `[output]`: model_path
 - `[run]`: device, verbose
@@ -186,10 +194,14 @@ function train_score_network(config_path::AbstractString;
     dataset_key = get(data_cfg, "dataset_key", "timeseries")
     samples_orientation = symbol_from_string(get(data_cfg, "samples_orientation", "columns"))
 
+    normalize_mode_raw = get(data_cfg, "normalize_mode", "per_feature")
+    normalize_mode = normalize_mode_raw isa Symbol ? normalize_mode_raw : symbol_from_string(String(normalize_mode_raw))
+
     dataset = timed("Loading dataset", verbose) do
         load_hdf5_dataset(data_path;
             dataset_key=dataset_key === "" ? nothing : dataset_key,
-            samples_orientation=samples_orientation)
+            samples_orientation=samples_orientation,
+            normalize_mode=normalize_mode)
     end
     @info "Dataset loaded" size = size(dataset.data) path = data_path
 
