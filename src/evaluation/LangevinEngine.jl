@@ -6,6 +6,7 @@ using KernelDensity
 using Base.Threads
 using Dates
 using ProgressMeter
+import CUDA
 
 Base.@kwdef mutable struct LangevinConfig
     dt::Float64 = 1e-2              # integrator step
@@ -192,7 +193,7 @@ function run_langevin(model, dataset::NormalizedDataset, cfg::LangevinConfig,
     dim = L * C
     n_ens = max(cfg.n_ensembles, 1)
 
-    # Use identity matrices for Phi and Sigma as specified in AGENTS.md
+    # Use identity matrices for Phi and Sigma in this setup.
     # Keep everything in Float32 to match the score model and avoid
     # unnecessary conversions inside the integrator.
     Phi = Matrix{Float32}(I, dim, dim)
@@ -226,6 +227,9 @@ function run_langevin(model, dataset::NormalizedDataset, cfg::LangevinConfig,
 
     # Seed RNG for reproducible ensemble initialization
     Random.seed!(cfg.seed)
+    if is_gpu(device)
+        CUDA.seed!(UInt64(cfg.seed))
+    end
 
     # Sample initial conditions
     # We need a (dim, n_ens) matrix

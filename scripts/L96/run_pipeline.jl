@@ -131,21 +131,17 @@ function observations_paths(params::Dict{String,Any}; base_dir::AbstractString=p
     )
 end
 
-function dataset_channel_count(path::AbstractString, dataset_key::AbstractString)
+function read_dataset_metadata(path::AbstractString, dataset_key::AbstractString)
     return h5open(path, "r") do h5
         haskey(h5, dataset_key) || error("Dataset key '$dataset_key' not found in $path")
         dset = h5[dataset_key]
-        length(size(dset)) == 3 || error("Expected 3D dataset '$dataset_key' in $path")
-        size(dset, 2)
-    end
-end
-
-function read_dataset_int_attrs(path::AbstractString, dataset_key::AbstractString)
-    return h5open(path, "r") do h5
-        haskey(h5, dataset_key) || error("Dataset key '$dataset_key' not found in $path")
-        dset = h5[dataset_key]
+        dsize = size(dset)
+        length(dsize) == 3 || error("Expected 3D dataset '$dataset_key' in $path")
         attrs = attributes(dset)
+
         out = Dict{String,Any}()
+        out["shape"] = (Int(dsize[1]), Int(dsize[2]), Int(dsize[3]))
+
         for k in ("K", "J", "spinup_steps", "save_every")
             if haskey(attrs, k)
                 out[k] = Int(read(attrs[k]))
@@ -160,18 +156,62 @@ function read_dataset_int_attrs(path::AbstractString, dataset_key::AbstractStrin
     end
 end
 
+function expected_dataset_metadata(params::Dict{String,Any})
+    return Dict{String,Any}(
+        "J" => Int(params["run.J"]),
+        "K" => Int(params["data.generation.K"]),
+        "F" => Float64(params["data.generation.F"]),
+        "h" => Float64(params["data.generation.h"]),
+        "c" => Float64(params["data.generation.c"]),
+        "b" => Float64(params["data.generation.b"]),
+        "dt" => Float64(params["data.generation.dt"]),
+        "spinup_steps" => Int(params["data.generation.spinup_steps"]),
+        "save_every" => Int(params["data.generation.save_every"]),
+        "process_noise_sigma" => Float64(params["data.generation.process_noise_sigma"]),
+        "shape" => (
+            Int(params["data.generation.nsamples"]),
+            Int(params["run.J"]) + 1,
+            Int(params["data.generation.K"]),
+        ),
+    )
+end
+
+function metadata_mismatches(found::Dict{String,Any}, expected::Dict{String,Any})
+    mismatches = String[]
+    for (k, ev) in expected
+        haskey(found, k) || begin
+            push!(mismatches, "$k missing (expected $ev)")
+            continue
+        end
+
+        fv = found[k]
+        if ev isa Tuple
+            fv == ev || push!(mismatches, "$k expected $ev but found $fv")
+        elseif ev isa Integer
+            Int(fv) == Int(ev) || push!(mismatches, "$k expected $(Int(ev)) but found $(Int(fv))")
+        elseif ev isa AbstractFloat
+            isapprox(Float64(fv), Float64(ev); rtol=1e-10, atol=1e-12) ||
+                push!(mismatches, "$k expected $(Float64(ev)) but found $(Float64(fv))")
+        else
+            fv == ev || push!(mismatches, "$k expected $ev but found $fv")
+        end
+    end
+    return mismatches
+end
+
 function write_dataset_params_toml(path::AbstractString, data_path::AbstractString, dataset_key::AbstractString, attrs::Dict{String,Any})
     mkpath(dirname(path))
     shape = h5open(data_path, "r") do h5
         size(h5[dataset_key])
     end
+    integ = Dict{String,Any}(k => v for (k, v) in attrs if k != "shape")
     cfg = Dict{String,Any}(
         "dataset" => Dict(
             "key" => String(dataset_key),
             "path" => abspath(data_path),
             "shape" => [Int(shape[1]), Int(shape[2]), Int(shape[3])],
         ),
-        "integration" => attrs,
+        "integration" => integ,
     )
     open(path, "w") do io
         TOML.print(io, cfg)
@@ -209,14 +249,17 @@ function ensure_data_available!(params::Dict{String,Any}; base_dir::AbstractStri
     mkpath(paths["jdir"])
 
     dataset_key = params["data.dataset_key"]
-    expected_channels = Int(params["run.J"]) + 1
+    expected = expected_dataset_metadata(params)
 
     if isfile(data_path)
-        nch = dataset_channel_count(data_path, dataset_key)
-        if nch != expected_channels
+        found = read_dataset_metadata(data_path, dataset_key)
+        mismatches = metadata_mismatches(found, expected)
+        if !isempty(mismatches)
+            msg = "Existing dataset metadata mismatch at $data_path:\n  - " * join(mismatches, "\n  - ")
             if !params["data.generate_if_missing"]
-                error("Existing dataset $data_path has $nch channels but expected $expected_channels for J=$(params["run.J"]).")
+                error(msg * "\nSet data.generate_if_missing=true to regenerate.")
             end
+            @warn msg * "\nRegenerating dataset because data.generate_if_missing=true"
             rm(data_path; force=true)
         end
     elseif islink(data_path) && !isfile(data_path)
@@ -228,10 +271,11 @@ function ensure_data_available!(params::Dict{String,Any}; base_dir::AbstractStri
             error("Dataset not found for J=$(params["run.J"]) at $data_path and generation is disabled.")
         end
         generate_observations_dataset!(params, data_path, params_toml)
-    elseif !isfile(params_toml)
-        attrs = read_dataset_int_attrs(data_path, dataset_key)
-        write_dataset_params_toml(params_toml, data_path, dataset_key, attrs)
     end
+
+    # Keep integration metadata TOML synchronized with the currently used dataset.
+    attrs = read_dataset_metadata(data_path, dataset_key)
+    write_dataset_params_toml(params_toml, data_path, dataset_key, attrs)
 
     # Force downstream stages to use the J-indexed observation dataset.
     params["data.path"] = data_path

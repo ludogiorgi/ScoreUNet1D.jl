@@ -57,8 +57,11 @@ function load_parameters(path::AbstractString)
     data = _as_dict(_require(cfg, "data"), "data")
     data_gen = haskey(data, "generation") ? _as_dict(data["generation"], "data.generation") : Dict{String,Any}()
     train = _as_dict(_require(cfg, "train"), "train")
+    train_ema = haskey(train, "ema") ? _as_dict(train["ema"], "train.ema") : Dict{String,Any}()
+    train_loss = haskey(train, "loss") ? _as_dict(train["loss"], "train.loss") : Dict{String,Any}()
     kl_eval = _as_dict(_require(train, "kl_eval"), "train.kl_eval")
     langevin = _as_dict(_require(cfg, "langevin"), "langevin")
+    langevin_quick = haskey(langevin, "quick") ? _as_dict(langevin["quick"], "langevin.quick") : Dict{String,Any}()
     figures = _as_dict(_require(cfg, "figures"), "figures")
     output = _as_dict(_require(cfg, "output"), "output")
 
@@ -99,6 +102,16 @@ function load_parameters(path::AbstractString)
         "train.base_channels" => _as_int(_get(train, "base_channels", 32), "train.base_channels"),
         "train.channel_multipliers" => _as_int_vec(_get(train, "channel_multipliers", [1, 2, 4]), "train.channel_multipliers"),
         "train.progress" => _as_bool(_get(train, "progress", false), "train.progress"),
+        "train.use_lr_schedule" => _as_bool(_get(train, "use_lr_schedule", true), "train.use_lr_schedule"),
+        "train.warmup_steps" => _as_int(_get(train, "warmup_steps", 500), "train.warmup_steps"),
+        "train.min_lr_factor" => _as_float(_get(train, "min_lr_factor", 0.1), "train.min_lr_factor"),
+        "train.norm_type" => _as_string(_get(train, "norm_type", "group"), "train.norm_type"),
+        "train.norm_groups" => _as_int(_get(train, "norm_groups", 0), "train.norm_groups"),
+        "train.loss.x_weight" => _as_float(_get(train_loss, "x_weight", 1.0), "train.loss.x_weight"),
+        "train.loss.y_weight" => _as_float(_get(train_loss, "y_weight", 1.0), "train.loss.y_weight"),
+        "train.ema.enabled" => _as_bool(_get(train_ema, "enabled", true), "train.ema.enabled"),
+        "train.ema.decay" => _as_float(_get(train_ema, "decay", 0.999), "train.ema.decay"),
+        "train.ema.use_for_eval" => _as_bool(_get(train_ema, "use_for_eval", true), "train.ema.use_for_eval"),
 
         "train.kl_eval.enabled" => _as_bool(_get(kl_eval, "enabled", true), "train.kl_eval.enabled"),
         "train.kl_eval.kl_eval_interval_epochs" => _as_int(_get(kl_eval, "kl_eval_interval_epochs", 10), "train.kl_eval.kl_eval_interval_epochs"),
@@ -114,6 +127,13 @@ function load_parameters(path::AbstractString)
         "langevin.use_boundary" => _as_bool(_get(langevin, "use_boundary", true), "langevin.use_boundary"),
         "langevin.boundary_min" => _as_float(_get(langevin, "boundary_min", -10.0), "langevin.boundary_min"),
         "langevin.boundary_max" => _as_float(_get(langevin, "boundary_max", 10.0), "langevin.boundary_max"),
+        "langevin.min_kept_snapshots_warn" => _as_int(_get(langevin, "min_kept_snapshots_warn", 800), "langevin.min_kept_snapshots_warn"),
+        "langevin.eval_profile" => lowercase(_as_string(_get(langevin, "eval_profile", "full"), "langevin.eval_profile")),
+        "langevin.quick.dt" => _as_float(_get(langevin_quick, "dt", _get(langevin, "dt", 0.004)), "langevin.quick.dt"),
+        "langevin.quick.resolution" => _as_int(_get(langevin_quick, "resolution", _get(langevin, "resolution", 25)), "langevin.quick.resolution"),
+        "langevin.quick.nsteps" => _as_int(_get(langevin_quick, "nsteps", _get(langevin, "nsteps", 25000)), "langevin.quick.nsteps"),
+        "langevin.quick.burn_in" => _as_int(_get(langevin_quick, "burn_in", _get(langevin, "burn_in", 5000)), "langevin.quick.burn_in"),
+        "langevin.quick.ensembles" => _as_int(_get(langevin_quick, "ensembles", _get(langevin, "ensembles", 256)), "langevin.quick.ensembles"),
 
         "figures.dpi" => _as_int(_get(figures, "dpi", 180), "figures.dpi"),
         "figures.style" => _as_string(_get(figures, "style", "publication"), "figures.style"),
@@ -131,8 +151,23 @@ function validate!(params::Dict{String,Any})
     params["run.J"] >= 1 || error("run.J must be >= 1")
     params["train.num_training_epochs"] >= 1 || error("train.num_training_epochs must be >= 1")
     params["train.batch_size"] >= 1 || error("train.batch_size must be >= 1")
+    params["train.warmup_steps"] >= 0 || error("train.warmup_steps must be >= 0")
+    params["train.min_lr_factor"] > 0 || error("train.min_lr_factor must be > 0")
+    params["train.min_lr_factor"] <= 1 || error("train.min_lr_factor must be <= 1")
+    params["train.norm_groups"] >= 0 || error("train.norm_groups must be >= 0")
+    params["train.loss.x_weight"] > 0 || error("train.loss.x_weight must be > 0")
+    params["train.loss.y_weight"] > 0 || error("train.loss.y_weight must be > 0")
+    params["train.ema.decay"] > 0 || error("train.ema.decay must be > 0")
+    params["train.ema.decay"] < 1 || error("train.ema.decay must be < 1")
     params["langevin.ensembles"] >= 1 || error("langevin.ensembles must be >= 1")
     params["langevin.nsteps"] > params["langevin.burn_in"] || error("langevin.nsteps must be > langevin.burn_in")
+    params["langevin.min_kept_snapshots_warn"] >= 1 || error("langevin.min_kept_snapshots_warn must be >= 1")
+    params["langevin.quick.ensembles"] >= 1 || error("langevin.quick.ensembles must be >= 1")
+    params["langevin.quick.nsteps"] > params["langevin.quick.burn_in"] || error("langevin.quick.nsteps must be > langevin.quick.burn_in")
+    params["langevin.quick.resolution"] >= 1 || error("langevin.quick.resolution must be >= 1")
+    params["langevin.quick.dt"] > 0 || error("langevin.quick.dt must be > 0")
+    ep = params["langevin.eval_profile"]
+    (ep == "full" || ep == "quick") || error("langevin.eval_profile must be 'full' or 'quick'")
     params["data.generation.K"] >= 2 || error("data.generation.K must be >= 2")
     params["data.generation.dt"] > 0 || error("data.generation.dt must be > 0")
     params["data.generation.spinup_steps"] >= 0 || error("data.generation.spinup_steps must be >= 0")
@@ -143,6 +178,9 @@ function validate!(params::Dict{String,Any})
     if params["train.kl_eval.enabled"]
         params["train.kl_eval.kl_eval_interval_epochs"] >= 1 || error("train.kl_eval.kl_eval_interval_epochs must be >= 1")
     end
+
+    nt = lowercase(params["train.norm_type"])
+    (nt == "batch" || nt == "group") || error("train.norm_type must be 'batch' or 'group'")
 
     return params
 end

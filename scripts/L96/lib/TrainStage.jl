@@ -58,6 +58,16 @@ function run_training!(params::Dict{String,Any}, dirs::Dict{String,String}; base
     env["L96_CHANNEL_MULTIPLIERS"] = join(string.(params["train.channel_multipliers"]), ",")
     env["L96_NORMALIZATION_MODE"] = params["data.normalization_mode"]
     env["L96_PROGRESS"] = params["train.progress"] ? "true" : "false"
+    env["L96_USE_LR_SCHEDULE"] = params["train.use_lr_schedule"] ? "true" : "false"
+    env["L96_WARMUP_STEPS"] = string(params["train.warmup_steps"])
+    env["L96_MIN_LR_FACTOR"] = string(params["train.min_lr_factor"])
+    env["L96_NORM_TYPE"] = params["train.norm_type"]
+    env["L96_NORM_GROUPS"] = string(params["train.norm_groups"])
+    env["L96_EMA_ENABLED"] = params["train.ema.enabled"] ? "true" : "false"
+    env["L96_EMA_DECAY"] = string(params["train.ema.decay"])
+    env["L96_EMA_USE_FOR_EVAL"] = params["train.ema.use_for_eval"] ? "true" : "false"
+    env["L96_LOSS_X_WEIGHT"] = string(params["train.loss.x_weight"])
+    env["L96_LOSS_Y_WEIGHT"] = string(params["train.loss.y_weight"])
 
     # KL per-epoch eval is done by the pipeline itself using full Langevin outputs.
     env["L96_EVAL_KL_EVERY"] = "0"

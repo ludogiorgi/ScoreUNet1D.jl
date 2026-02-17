@@ -43,9 +43,32 @@ function write_metrics_toml(path::AbstractString, epoch::Int, metrics_txt_path::
     return path
 end
 
+function _effective_langevin_config(params::Dict{String,Any})
+    profile = String(params["langevin.eval_profile"])
+    if profile == "quick"
+        return Dict{String,Any}(
+            "profile" => "quick",
+            "dt" => params["langevin.quick.dt"],
+            "resolution" => params["langevin.quick.resolution"],
+            "nsteps" => params["langevin.quick.nsteps"],
+            "burn_in" => params["langevin.quick.burn_in"],
+            "ensembles" => params["langevin.quick.ensembles"],
+        )
+    end
+    return Dict{String,Any}(
+        "profile" => "full",
+        "dt" => params["langevin.dt"],
+        "resolution" => params["langevin.resolution"],
+        "nsteps" => params["langevin.nsteps"],
+        "burn_in" => params["langevin.burn_in"],
+        "ensembles" => params["langevin.ensembles"],
+    )
+end
+
 function run_eval!(params::Dict{String,Any}, dirs::Dict{String,String}, epoch::Int, model_path::AbstractString; base_dir::AbstractString=pwd())
     log_path = joinpath(dirs["logs"], "pipeline.log")
     eval_tag = "eval_epoch_" * lpad(string(epoch), 4, '0')
+    eff = _effective_langevin_config(params)
 
     data_path = abspath(joinpath(base_dir, params["data.path"]))
     fig_dir = joinpath(dirs["figures"], eval_tag)
@@ -74,17 +97,19 @@ function run_eval!(params::Dict{String,Any}, dirs::Dict{String,String}, epoch::I
     env["L96_PIPELINE_MODE"] = "true"
 
     env["L96_LANGEVIN_DEVICE"] = params["langevin.device"]
-    env["L96_LANGEVIN_DT"] = string(params["langevin.dt"])
-    env["L96_LANGEVIN_RESOLUTION"] = string(params["langevin.resolution"])
-    env["L96_LANGEVIN_STEPS"] = string(params["langevin.nsteps"])
-    env["L96_LANGEVIN_BURN_IN"] = string(params["langevin.burn_in"])
-    env["L96_LANGEVIN_ENSEMBLES"] = string(params["langevin.ensembles"])
+    env["L96_LANGEVIN_DT"] = string(eff["dt"])
+    env["L96_LANGEVIN_RESOLUTION"] = string(eff["resolution"])
+    env["L96_LANGEVIN_STEPS"] = string(eff["nsteps"])
+    env["L96_LANGEVIN_BURN_IN"] = string(eff["burn_in"])
+    env["L96_LANGEVIN_ENSEMBLES"] = string(eff["ensembles"])
+    env["L96_LANGEVIN_PROFILE"] = String(eff["profile"])
     env["L96_LANGEVIN_PROGRESS"] = params["langevin.progress"] ? "true" : "false"
     env["L96_PDF_BINS"] = string(params["langevin.pdf_bins"])
     env["L96_LANGEVIN_SEED"] = string(params["run.seed"] + epoch)
     env["L96_USE_BOUNDARY"] = params["langevin.use_boundary"] ? "true" : "false"
     env["L96_BOUNDARY_MIN"] = string(params["langevin.boundary_min"])
     env["L96_BOUNDARY_MAX"] = string(params["langevin.boundary_max"])
+    env["L96_MIN_KEPT_SNAPSHOTS_WARN"] = string(params["langevin.min_kept_snapshots_warn"])
     env["L96_FIG_DPI"] = string(params["figures.dpi"])
 
     cmd = setenv(`julia --project=. scripts/L96/lib/sample_and_compare.jl`, env)
@@ -112,6 +137,7 @@ function run_eval!(params::Dict{String,Any}, dirs::Dict{String,String}, epoch::I
     return Dict{String,Any}(
         "epoch" => epoch,
         "tag" => eval_tag,
+        "langevin_profile" => String(eff["profile"]),
         "fig_dir" => fig_dir,
         "metrics_txt" => metrics_txt,
         "metrics_toml" => metrics_toml,

@@ -40,6 +40,13 @@ const PROGRESS = lowercase(get(ENV, "L96_PROGRESS", "false")) == "true"
 const USE_LR_SCHEDULE = lowercase(get(ENV, "L96_USE_LR_SCHEDULE", "true")) == "true"
 const WARMUP_STEPS = parse(Int, get(ENV, "L96_WARMUP_STEPS", "500"))
 const MIN_LR_FACTOR = parse(Float64, get(ENV, "L96_MIN_LR_FACTOR", "0.1"))
+const NORM_TYPE = lowercase(get(ENV, "L96_NORM_TYPE", "group"))
+const NORM_GROUPS = parse(Int, get(ENV, "L96_NORM_GROUPS", "0"))
+const EMA_ENABLED = lowercase(get(ENV, "L96_EMA_ENABLED", "true")) == "true"
+const EMA_DECAY = parse(Float32, get(ENV, "L96_EMA_DECAY", "0.999"))
+const EMA_USE_FOR_EVAL = lowercase(get(ENV, "L96_EMA_USE_FOR_EVAL", "true")) == "true"
+const LOSS_X_WEIGHT = parse(Float32, get(ENV, "L96_LOSS_X_WEIGHT", "1.0"))
+const LOSS_Y_WEIGHT = parse(Float32, get(ENV, "L96_LOSS_Y_WEIGHT", "1.0"))
 
 const EVAL_NUM_SAMPLES = parse(Int, get(ENV, "L96_EVAL_NUM_SAMPLES", "2048"))
 const EVAL_BATCH_SIZE = parse(Int, get(ENV, "L96_EVAL_BATCH_SIZE", "256"))
@@ -57,6 +64,16 @@ const EVAL_KL_LOW_Q = parse(Float64, get(ENV, "L96_EVAL_KL_LOW_Q", "0.001"))
 const EVAL_KL_HIGH_Q = parse(Float64, get(ENV, "L96_EVAL_KL_HIGH_Q", "0.999"))
 const EVAL_KL_BOUNDARY = lowercase(get(ENV, "L96_EVAL_KL_BOUNDARY", "true")) == "true"
 const EVAL_KL_SEED_BASE = parse(Int, get(ENV, "L96_EVAL_KL_SEED_BASE", "1000"))
+
+function parse_norm_type(raw::AbstractString)
+    s = lowercase(strip(raw))
+    if s == "batch"
+        return :batch
+    elseif s == "group"
+        return :group
+    end
+    error("Unsupported L96_NORM_TYPE='$raw'. Use 'batch' or 'group'.")
+end
 
 function parse_channel_multipliers(raw::AbstractString)
     vals = Int[]
@@ -283,6 +300,8 @@ function save_training_config(run_dir::AbstractString,
                               tensor_shape::NTuple{3,Int},
                               multipliers::Vector{Int})
     isempty(TRAIN_CONFIG_PATH) && return ""
+    steps_per_epoch = cld(tensor_shape[3], BATCH_SIZE)
+    ema_decay_epoch = Float64(EMA_DECAY ^ steps_per_epoch)
 
     cfg = Dict{String,Any}(
         "stage" => "train_unet",
@@ -302,6 +321,8 @@ function save_training_config(run_dir::AbstractString,
             "base_channels" => BASE_CHANNELS,
             "channel_multipliers" => multipliers,
             "periodic" => true,
+            "norm_type" => NORM_TYPE,
+            "norm_groups" => NORM_GROUPS,
         ),
         "trainer" => Dict(
             "device" => DEVICE_NAME,
@@ -314,9 +335,16 @@ function save_training_config(run_dir::AbstractString,
             "use_lr_schedule" => USE_LR_SCHEDULE,
             "warmup_steps" => WARMUP_STEPS,
             "min_lr_factor" => MIN_LR_FACTOR,
+            "loss_x_weight" => Float64(LOSS_X_WEIGHT),
+            "loss_y_weight" => Float64(LOSS_Y_WEIGHT),
+            "ema_enabled" => EMA_ENABLED,
+            "ema_decay_per_step" => Float64(EMA_DECAY),
+            "ema_decay_effective_per_epoch" => ema_decay_epoch,
+            "ema_use_for_eval" => EMA_USE_FOR_EVAL,
         ),
         "eval" => Dict(
             "eval_num_samples" => EVAL_NUM_SAMPLES,
+            "eval_dataset_mode" => "train_full",
             "eval_batch_size" => EVAL_BATCH_SIZE,
             "eval_loss_every" => EVAL_LOSS_EVERY,
             "eval_kl_every" => EVAL_KL_EVERY,
@@ -350,17 +378,25 @@ function main()
 
     tensor_norm, stats = normalize_tensor(tensor, NORMALIZATION_MODE)
     dataset = NormalizedDataset(tensor_norm, stats)
-    eval_tensor = build_eval_tensor(tensor_norm, EVAL_NUM_SAMPLES, TRAIN_SEED + 11)
-    eval_dataset = NormalizedDataset(eval_tensor, stats)
+    eval_tensor = tensor_norm
+    eval_dataset = dataset
     multipliers = parse_channel_multipliers(CHANNEL_MULTIPLIERS_RAW)
     train_config_path = save_training_config(RUN_DIR, size(tensor), multipliers)
+    norm_symbol = parse_norm_type(NORM_TYPE)
+    steps_per_epoch = cld(B, BATCH_SIZE)
+    # EMA decay is commonly chosen as a per-step factor; convert to an equivalent
+    # per-epoch factor because this stage updates EMA once per epoch.
+    ema_decay_epoch = Float32(EMA_DECAY ^ steps_per_epoch)
 
+    Random.seed!(TRAIN_SEED)
     cfg = ScoreUNetConfig(
         in_channels=C,
         out_channels=C,
         base_channels=BASE_CHANNELS,
         channel_multipliers=multipliers,
         periodic=true,
+        norm_type=norm_symbol,
+        norm_groups=NORM_GROUPS,
     )
     model = build_unet(cfg)
 
@@ -374,6 +410,8 @@ function main()
         use_lr_schedule=USE_LR_SCHEDULE,
         warmup_steps=WARMUP_STEPS,
         min_lr_factor=MIN_LR_FACTOR,
+        x_loss_weight=LOSS_X_WEIGHT,
+        y_loss_weight=LOSS_Y_WEIGHT,
     )
 
     device = select_device(DEVICE_NAME)
@@ -388,10 +426,26 @@ function main()
     kl_mode_vals = Float64[]
     kl_global_vals = Float64[]
     epoch_progress = Progress(EPOCHS; desc="Training epochs")
+    ema_model_cpu = EMA_ENABLED ? move_model(model, ScoreUNet1D.CPUDevice()) : nothing
+    if ema_model_cpu !== nothing
+        Flux.testmode!(ema_model_cpu)
+    end
 
     epoch_callback = function(epoch::Int, model_epoch, epoch_time::Real)
         push!(epoch_times, Float64(epoch_time))
         Flux.testmode!(model_epoch)
+        model_cpu_epoch = move_model(model_epoch, ScoreUNet1D.CPUDevice())
+        Flux.testmode!(model_cpu_epoch)
+
+        if ema_model_cpu !== nothing
+            ema_model_cpu = Flux.fmap(ema_model_cpu, model_cpu_epoch) do a, b
+                if a isa AbstractArray && b isa AbstractArray
+                    return ema_decay_epoch .* a .+ Float32(1 - ema_decay_epoch) .* b
+                end
+                return a
+            end
+            Flux.testmode!(ema_model_cpu)
+        end
 
         if EVAL_LOSS_EVERY > 0 && epoch % EVAL_LOSS_EVERY == 0
             eval_loss = eval_denoise_loss(model_epoch, eval_tensor, SIGMA, device;
@@ -413,11 +467,21 @@ function main()
 
         if SAVE_CHECKPOINT_EVERY > 0 && epoch % SAVE_CHECKPOINT_EVERY == 0
             ensure_dir(CHECKPOINT_DIR)
-            model_cpu_epoch = move_model(model_epoch, ScoreUNet1D.CPUDevice())
-            Flux.testmode!(model_cpu_epoch)
             ckpt_path = joinpath(CHECKPOINT_DIR, @sprintf("epoch_%03d.bson", epoch))
-            BSON.@save ckpt_path model = model_cpu_epoch cfg trainer_cfg stats epoch
-            @info "Saved epoch checkpoint" path = ckpt_path
+            if EMA_ENABLED && EMA_USE_FOR_EVAL && ema_model_cpu !== nothing
+                raw_ckpt = joinpath(CHECKPOINT_DIR, @sprintf("epoch_%03d_raw.bson", epoch))
+                BSON.@save raw_ckpt model = model_cpu_epoch cfg trainer_cfg stats epoch
+                BSON.@save ckpt_path model = ema_model_cpu cfg trainer_cfg stats epoch
+                @info "Saved epoch checkpoint" path = ckpt_path raw = raw_ckpt
+            elseif EMA_ENABLED && ema_model_cpu !== nothing
+                ema_ckpt = joinpath(CHECKPOINT_DIR, @sprintf("epoch_%03d_ema.bson", epoch))
+                BSON.@save ckpt_path model = model_cpu_epoch cfg trainer_cfg stats epoch
+                BSON.@save ema_ckpt model = ema_model_cpu cfg trainer_cfg stats epoch
+                @info "Saved epoch checkpoint" path = ckpt_path ema = ema_ckpt
+            else
+                BSON.@save ckpt_path model = model_cpu_epoch cfg trainer_cfg stats epoch
+                @info "Saved epoch checkpoint" path = ckpt_path
+            end
         end
 
         epoch_progress !== nothing && ProgressMeter.next!(epoch_progress; showvalues=[(:epoch, epoch), (:epoch_time_sec, round(Float64(epoch_time); digits=2))])
@@ -426,11 +490,17 @@ function main()
         return nothing
     end
 
-    @info "Starting L96 training" device = DEVICE_NAME epochs = EPOCHS batch_size = BATCH_SIZE sigma = SIGMA multipliers = multipliers normalization = NORMALIZATION_MODE run_dir = RUN_DIR config = (isempty(train_config_path) ? "disabled_in_pipeline_mode" : train_config_path)
+    @info "Starting L96 training" device = DEVICE_NAME epochs = EPOCHS batch_size = BATCH_SIZE sigma = SIGMA multipliers = multipliers normalization = NORMALIZATION_MODE ema_decay_per_step = Float64(EMA_DECAY) ema_decay_effective_per_epoch = Float64(ema_decay_epoch) run_dir = RUN_DIR config = (isempty(train_config_path) ? "disabled_in_pipeline_mode" : train_config_path)
     history = train!(model, dataset, trainer_cfg; device=device, epoch_callback=epoch_callback)
     epoch_progress !== nothing && ProgressMeter.finish!(epoch_progress)
 
-    model_cpu = is_gpu(device) ? move_model(model, ScoreUNet1D.CPUDevice()) : model
+    model_cpu_raw = is_gpu(device) ? move_model(model, ScoreUNet1D.CPUDevice()) : model
+    Flux.testmode!(model_cpu_raw)
+    model_cpu = if EMA_ENABLED && EMA_USE_FOR_EVAL && ema_model_cpu !== nothing
+        ema_model_cpu
+    else
+        model_cpu_raw
+    end
     Flux.testmode!(model_cpu)
 
     training_metrics_path = joinpath(TRAIN_DIAG_DIR, "training_metrics.csv")
@@ -446,6 +516,10 @@ function main()
 
     normalization_mode = NORMALIZATION_MODE
     run_dir = RUN_DIR
+    if EMA_ENABLED && EMA_USE_FOR_EVAL
+        raw_model_path = joinpath(dirname(MODEL_PATH), "score_model_raw.bson")
+        BSON.@save raw_model_path model = model_cpu_raw cfg trainer_cfg stats history epoch_times eval_epochs eval_losses kl_epochs kl_mode_vals kl_global_vals training_metrics_path normalization_mode run_dir train_config_path
+    end
     BSON.@save MODEL_PATH model = model_cpu cfg trainer_cfg stats history epoch_times eval_epochs eval_losses kl_epochs kl_mode_vals kl_global_vals training_metrics_path normalization_mode run_dir train_config_path
 
     train_metrics_for_manifest = Dict{String,Any}(
@@ -479,10 +553,18 @@ function main()
                 "base_channels" => BASE_CHANNELS,
                 "channel_multipliers" => multipliers,
                 "normalization_mode" => NORMALIZATION_MODE,
+                "norm_type" => NORM_TYPE,
+                "norm_groups" => NORM_GROUPS,
                 "device" => DEVICE_NAME,
                 "use_lr_schedule" => USE_LR_SCHEDULE,
                 "warmup_steps" => WARMUP_STEPS,
                 "min_lr_factor" => MIN_LR_FACTOR,
+                "x_loss_weight" => Float64(LOSS_X_WEIGHT),
+                "y_loss_weight" => Float64(LOSS_Y_WEIGHT),
+                "ema_enabled" => EMA_ENABLED,
+                "ema_decay_per_step" => Float64(EMA_DECAY),
+                "ema_decay_effective_per_epoch" => Float64(ema_decay_epoch),
+                "ema_use_for_eval" => EMA_USE_FOR_EVAL,
             ),
             paths=Dict(
                 "data_path" => abspath(DATA_PATH),

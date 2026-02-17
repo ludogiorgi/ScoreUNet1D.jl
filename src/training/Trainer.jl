@@ -20,6 +20,8 @@ Base.@kwdef mutable struct ScoreTrainerConfig
     warmup_steps::Int = 500  # Linear warmup steps
     min_lr_factor::Float64 = 0.1  # Minimum LR as fraction of max_lr
     epoch_subset_size::Int = 0  # If > 0, randomly sample this many samples each epoch
+    x_loss_weight::Float32 = 1.0f0
+    y_loss_weight::Float32 = 1.0f0
 end
 
 struct TrainingHistory
@@ -96,6 +98,14 @@ function train_single_device!(model, dataset::NormalizedDataset, cfg::ScoreTrain
         noise_gpu_buffer = CUDA.CuArray{Float32}(undef, L, C, cfg.batch_size)
     end
 
+    # Channel-wise denoising loss weighting:
+    # channel 1 is x, channels 2:C are y.
+    channel_weights = fill(Float32(cfg.y_loss_weight), C)
+    channel_weights[1] = Float32(cfg.x_loss_weight)
+    channel_weights ./= mean(channel_weights)
+    channel_weight_cpu = reshape(channel_weights, 1, C, 1)
+    channel_weight_gpu = device isa GPUDevice ? CUDA.cu(channel_weight_cpu) : nothing
+
     for epoch in 1:cfg.epochs
         epoch_t0 = time_ns()
 
@@ -157,6 +167,7 @@ function train_single_device!(model, dataset::NormalizedDataset, cfg::ScoreTrain
                 batch = batch_view_gpu
 
                 noise_view_gpu = view(noise_gpu_buffer, :, :, 1:current_batch_size)
+                CUDA.seed!(UInt64(cfg.seed + global_step))
                 CUDA.randn!(noise_view_gpu)
                 noise = noise_view_gpu
             else
@@ -179,7 +190,11 @@ function train_single_device!(model, dataset::NormalizedDataset, cfg::ScoreTrain
             # Scale loss by accumulation steps for proper gradient magnitude
             loss, grads = Flux.withgradient(model_on_device) do m
                 pred = m(noisy)
-                mse(pred, noise) / cfg.accumulation_steps
+                if device isa GPUDevice
+                    mean(((pred .- noise) .^ 2) .* channel_weight_gpu) / cfg.accumulation_steps
+                else
+                    mean(((pred .- noise) .^ 2) .* channel_weight_cpu) / cfg.accumulation_steps
+                end
             end
 
             # Accumulate gradients
@@ -670,6 +685,3 @@ function train_multi_gpu!(model, dataset::NormalizedDataset, cfg::ScoreTrainerCo
     progress !== nothing && ProgressMeter.finish!(progress)
     return TrainingHistory(epoch_losses, batch_losses)
 end
-
-
-

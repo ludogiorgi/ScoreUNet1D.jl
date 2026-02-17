@@ -39,10 +39,12 @@ const LANGEVIN_RESOLUTION = parse(Int, get(ENV, "L96_LANGEVIN_RESOLUTION", "100"
 const LANGEVIN_SAMPLE_DT = LANGEVIN_DT * LANGEVIN_RESOLUTION
 const LANGEVIN_BURN_IN = parse(Int, get(ENV, "L96_LANGEVIN_BURN_IN", "2000"))
 const LANGEVIN_ENSEMBLES = parse(Int, get(ENV, "L96_LANGEVIN_ENSEMBLES", "16"))
+const LANGEVIN_PROFILE = lowercase(get(ENV, "L96_LANGEVIN_PROFILE", "full"))
 const PDF_BINS = parse(Int, get(ENV, "L96_PDF_BINS", "80"))
 const LANGEVIN_SEED = parse(Int, get(ENV, "L96_LANGEVIN_SEED", "7"))
 const LANGEVIN_PROGRESS = lowercase(get(ENV, "L96_LANGEVIN_PROGRESS", "false")) == "true"
 const LANGEVIN_DEVICE_NAME = get(ENV, "L96_LANGEVIN_DEVICE", "GPU:0")
+const MIN_KEPT_SNAPSHOTS_WARN = parse(Int, get(ENV, "L96_MIN_KEPT_SNAPSHOTS_WARN", "800"))
 
 const TARGET_AVG_KL = parse(Float64, get(ENV, "L96_TARGET_AVG_KL", "0.05"))
 const KL_LOW_Q = parse(Float64, get(ENV, "L96_KL_LOW_Q", "0.001"))
@@ -715,6 +717,7 @@ function save_eval_config(run_dir::AbstractString,
             "metrics_path" => abspath(METRICS_PATH),
         ),
         "langevin" => Dict(
+            "profile" => LANGEVIN_PROFILE,
             "device_requested" => LANGEVIN_DEVICE_NAME,
             "device_effective" => effective_device_name,
             "dt" => LANGEVIN_DT,
@@ -729,6 +732,7 @@ function save_eval_config(run_dir::AbstractString,
             "use_boundary" => USE_BOUNDARY,
             "boundary_min" => BOUNDARY_MIN,
             "boundary_max" => BOUNDARY_MAX,
+            "min_kept_snapshots_warn" => MIN_KEPT_SNAPSHOTS_WARN,
         ),
         "metrics_config" => Dict(
             "pdf_bins" => PDF_BINS,
@@ -745,6 +749,19 @@ function save_eval_config(run_dir::AbstractString,
         ),
     )
     return L96RunLayout.write_toml_file(EVAL_CONFIG_PATH, cfg)
+end
+
+function kept_snapshot_diagnostics(nsteps::Int, burn_in::Int, resolution::Int, ensembles::Int)
+    total_snapshots = fld(max(nsteps, 1), max(resolution, 1))
+    burn_snapshots = fld(max(burn_in, 0), max(resolution, 1))
+    kept_per_ensemble = max(total_snapshots - burn_snapshots, 0)
+    total_kept = kept_per_ensemble * max(ensembles, 1)
+    return (
+        total_snapshots=total_snapshots,
+        burn_snapshots=burn_snapshots,
+        kept_per_ensemble=kept_per_ensemble,
+        total_kept=total_kept,
+    )
 end
 
 function resolve_langevin_device(name::AbstractString)
@@ -800,6 +817,10 @@ function main()
 
     @info "Running L96 Langevin sampling" device = effective_device_name sigma = trainer_cfg.sigma
     result = run_langevin(model, dataset, langevin_cfg; device=device)
+    kept_diag = kept_snapshot_diagnostics(LANGEVIN_STEPS, LANGEVIN_BURN_IN, LANGEVIN_RESOLUTION, LANGEVIN_ENSEMBLES)
+    if kept_diag.kept_per_ensemble < MIN_KEPT_SNAPSHOTS_WARN
+        @warn "Low retained snapshots per ensemble for Langevin PDF estimate" kept_per_ensemble = kept_diag.kept_per_ensemble threshold = MIN_KEPT_SNAPSHOTS_WARN nsteps = LANGEVIN_STEPS burn_in = LANGEVIN_BURN_IN resolution = LANGEVIN_RESOLUTION
+    end
 
     L, C, _ = size(tensor_truth)
     C >= 2 || error("Expected at least 2 channels (x + y1) for plotting; got $C")
@@ -964,6 +985,12 @@ function main()
         "target_avg_mode_kl" => TARGET_AVG_KL,
         "kl_low_q" => KL_LOW_Q,
         "kl_high_q" => KL_HIGH_Q,
+        "langevin_profile_quick0_full1" => LANGEVIN_PROFILE == "quick" ? 0.0 : 1.0,
+        "kept_snapshots_per_ensemble" => Float64(kept_diag.kept_per_ensemble),
+        "total_kept_snapshots_all_ensembles" => Float64(kept_diag.total_kept),
+        "burn_in_snapshots_per_ensemble" => Float64(kept_diag.burn_snapshots),
+        "min_kept_snapshots_warn_threshold" => Float64(MIN_KEPT_SNAPSHOTS_WARN),
+        "kept_snapshots_warn_flag" => kept_diag.kept_per_ensemble < MIN_KEPT_SNAPSHOTS_WARN ? 1.0 : 0.0,
     )
     write_metrics(METRICS_PATH, metrics)
     if !PIPELINE_MODE
@@ -971,12 +998,14 @@ function main()
             RUN_DIR;
             stage="sample_and_compare",
             parameters=Dict(
+                "langevin_profile" => LANGEVIN_PROFILE,
                 "langevin_dt" => LANGEVIN_DT,
                 "langevin_sample_dt" => LANGEVIN_SAMPLE_DT,
                 "langevin_nsteps" => LANGEVIN_STEPS,
                 "langevin_resolution" => LANGEVIN_RESOLUTION,
                 "langevin_burn_in" => LANGEVIN_BURN_IN,
                 "langevin_ensembles" => LANGEVIN_ENSEMBLES,
+                "langevin_kept_snapshots_per_ensemble" => kept_diag.kept_per_ensemble,
                 "langevin_seed" => LANGEVIN_SEED,
                 "langevin_device_requested" => LANGEVIN_DEVICE_NAME,
                 "langevin_device_effective" => effective_device_name,

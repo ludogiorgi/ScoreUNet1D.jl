@@ -22,3 +22,9 @@
 !test/**/*.jl
 
 # Everything else (artifacts, data, binaries, figures, logs) remains ignored by default.
+
+# L96 generated run artifacts (prevent accidental commits of experiment outputs)
+scripts/L96/runs_J*/
+scripts/L96/scripts/
+scripts/L96/**/logs/_tmp/
+scripts/L96/observations/**/l96_timeseries.hdf5
