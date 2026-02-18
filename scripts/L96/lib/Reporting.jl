@@ -70,6 +70,7 @@ function write_run_summary(run_dir::AbstractString,
                 "loss_y_weight" => Float64(params["train.loss.y_weight"]),
             ),
             "model" => Dict{String,Any}(
+                "architecture" => String(params["train.model_arch"]),
                 "base_channels" => Int(params["train.base_channels"]),
                 "channel_multipliers" => params["train.channel_multipliers"],
                 "norm_type" => String(params["train.norm_type"]),

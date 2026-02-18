@@ -36,6 +36,7 @@ const SIGMA = parse(Float32, get(ENV, "L96_TRAIN_NOISE_SIGMA", "0.08"))
 const BASE_CHANNELS = parse(Int, get(ENV, "L96_BASE_CHANNELS", "32"))
 const CHANNEL_MULTIPLIERS_RAW = get(ENV, "L96_CHANNEL_MULTIPLIERS", "1,2,4")
 const NORMALIZATION_MODE = lowercase(get(ENV, "L96_NORMALIZATION_MODE", "split_xy"))
+const MODEL_ARCH = lowercase(get(ENV, "L96_MODEL_ARCH", "schneider_dualstream"))
 const PROGRESS = lowercase(get(ENV, "L96_PROGRESS", "false")) == "true"
 const USE_LR_SCHEDULE = lowercase(get(ENV, "L96_USE_LR_SCHEDULE", "true")) == "true"
 const WARMUP_STEPS = parse(Int, get(ENV, "L96_WARMUP_STEPS", "500"))
@@ -73,6 +74,16 @@ function parse_norm_type(raw::AbstractString)
         return :group
     end
     error("Unsupported L96_NORM_TYPE='$raw'. Use 'batch' or 'group'.")
+end
+
+function parse_model_arch(raw::AbstractString)
+    s = lowercase(strip(raw))
+    if s == "schneider_dualstream"
+        return :schneider_dualstream
+    elseif s == "multichannel_unet"
+        return :multichannel_unet
+    end
+    error("Unsupported L96_MODEL_ARCH='$raw'. Use 'schneider_dualstream' or 'multichannel_unet'.")
 end
 
 function parse_channel_multipliers(raw::AbstractString)
@@ -298,7 +309,8 @@ end
 
 function save_training_config(run_dir::AbstractString,
                               tensor_shape::NTuple{3,Int},
-                              multipliers::Vector{Int})
+                              multipliers::Vector{Int},
+                              model_arch::Symbol)
     isempty(TRAIN_CONFIG_PATH) && return ""
     steps_per_epoch = cld(tensor_shape[3], BATCH_SIZE)
     ema_decay_epoch = Float64(EMA_DECAY ^ steps_per_epoch)
@@ -318,6 +330,7 @@ function save_training_config(run_dir::AbstractString,
             "normalization_mode" => NORMALIZATION_MODE,
         ),
         "model" => Dict(
+            "architecture" => String(model_arch),
             "base_channels" => BASE_CHANNELS,
             "channel_multipliers" => multipliers,
             "periodic" => true,
@@ -381,7 +394,8 @@ function main()
     eval_tensor = tensor_norm
     eval_dataset = dataset
     multipliers = parse_channel_multipliers(CHANNEL_MULTIPLIERS_RAW)
-    train_config_path = save_training_config(RUN_DIR, size(tensor), multipliers)
+    model_arch = parse_model_arch(MODEL_ARCH)
+    train_config_path = save_training_config(RUN_DIR, size(tensor), multipliers, model_arch)
     norm_symbol = parse_norm_type(NORM_TYPE)
     steps_per_epoch = cld(B, BATCH_SIZE)
     # EMA decay is commonly chosen as a per-step factor; convert to an equivalent
@@ -389,16 +403,37 @@ function main()
     ema_decay_epoch = Float32(EMA_DECAY ^ steps_per_epoch)
 
     Random.seed!(TRAIN_SEED)
-    cfg = ScoreUNetConfig(
-        in_channels=C,
-        out_channels=C,
-        base_channels=BASE_CHANNELS,
-        channel_multipliers=multipliers,
-        periodic=true,
-        norm_type=norm_symbol,
-        norm_groups=NORM_GROUPS,
-    )
-    model = build_unet(cfg)
+    cfg = nothing
+    model = nothing
+    if model_arch == :schneider_dualstream
+        C >= 2 || error("Need at least 2 channels (x + fast channels) for schneider_dualstream, got $C")
+        J_fast = C - 1
+        sch_cfg = L96SchneiderScoreConfig(
+            K=L,
+            J=J_fast,
+            slow_base_channels=max(8, fld(BASE_CHANNELS, 2)),
+            fast_base_channels=BASE_CHANNELS,
+            slow_channel_multipliers=multipliers,
+            fast_channel_multipliers=multipliers,
+            kernel_size=5,
+            norm_type=norm_symbol,
+            norm_groups=NORM_GROUPS,
+        )
+        cfg = sch_cfg
+        model = build_l96_schneider_legacy_model(sch_cfg)
+    else
+        vanilla_cfg = ScoreUNetConfig(
+            in_channels=C,
+            out_channels=C,
+            base_channels=BASE_CHANNELS,
+            channel_multipliers=multipliers,
+            periodic=true,
+            norm_type=norm_symbol,
+            norm_groups=NORM_GROUPS,
+        )
+        cfg = vanilla_cfg
+        model = build_unet(vanilla_cfg)
+    end
 
     trainer_cfg = ScoreTrainerConfig(
         batch_size=BATCH_SIZE,
@@ -490,7 +525,7 @@ function main()
         return nothing
     end
 
-    @info "Starting L96 training" device = DEVICE_NAME epochs = EPOCHS batch_size = BATCH_SIZE sigma = SIGMA multipliers = multipliers normalization = NORMALIZATION_MODE ema_decay_per_step = Float64(EMA_DECAY) ema_decay_effective_per_epoch = Float64(ema_decay_epoch) run_dir = RUN_DIR config = (isempty(train_config_path) ? "disabled_in_pipeline_mode" : train_config_path)
+    @info "Starting L96 training" device = DEVICE_NAME epochs = EPOCHS batch_size = BATCH_SIZE sigma = SIGMA multipliers = multipliers architecture = String(model_arch) normalization = NORMALIZATION_MODE ema_decay_per_step = Float64(EMA_DECAY) ema_decay_effective_per_epoch = Float64(ema_decay_epoch) run_dir = RUN_DIR config = (isempty(train_config_path) ? "disabled_in_pipeline_mode" : train_config_path)
     history = train!(model, dataset, trainer_cfg; device=device, epoch_callback=epoch_callback)
     epoch_progress !== nothing && ProgressMeter.finish!(epoch_progress)
 
@@ -552,6 +587,7 @@ function main()
                 "learning_rate" => LR,
                 "base_channels" => BASE_CHANNELS,
                 "channel_multipliers" => multipliers,
+                "architecture" => String(model_arch),
                 "normalization_mode" => NORMALIZATION_MODE,
                 "norm_type" => NORM_TYPE,
                 "norm_groups" => NORM_GROUPS,

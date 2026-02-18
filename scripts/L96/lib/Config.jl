@@ -101,6 +101,7 @@ function load_parameters(path::AbstractString)
         "train.sigma" => _as_float(_get(train, "sigma", 0.05), "train.sigma"),
         "train.base_channels" => _as_int(_get(train, "base_channels", 32), "train.base_channels"),
         "train.channel_multipliers" => _as_int_vec(_get(train, "channel_multipliers", [1, 2, 4]), "train.channel_multipliers"),
+        "train.model_arch" => lowercase(_as_string(_get(train, "model_arch", "schneider_dualstream"), "train.model_arch")),
         "train.progress" => _as_bool(_get(train, "progress", false), "train.progress"),
         "train.use_lr_schedule" => _as_bool(_get(train, "use_lr_schedule", true), "train.use_lr_schedule"),
         "train.warmup_steps" => _as_int(_get(train, "warmup_steps", 500), "train.warmup_steps"),
@@ -181,6 +182,9 @@ function validate!(params::Dict{String,Any})
 
     nt = lowercase(params["train.norm_type"])
     (nt == "batch" || nt == "group") || error("train.norm_type must be 'batch' or 'group'")
+    ma = params["train.model_arch"]
+    (ma == "schneider_dualstream" || ma == "multichannel_unet") ||
+        error("train.model_arch must be 'schneider_dualstream' or 'multichannel_unet'")
 
     return params
 end

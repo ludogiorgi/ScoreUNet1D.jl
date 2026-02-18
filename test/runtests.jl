@@ -52,3 +52,5 @@ end
     @test result.kl_divergence ≥ 0
     @test length(result.bin_centers) == 16
 end
+
+include("l96_schneider_tests.jl")

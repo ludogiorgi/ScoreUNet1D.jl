@@ -14,6 +14,7 @@ using ProgressMeter
 include("architecture/PeriodicConv.jl")
 include("architecture/Blocks.jl")
 include("architecture/UNet1D.jl")
+include("models/L96SchneiderUNet.jl")
 include("data/DataPipeline.jl")
 include("Device.jl")
 include("training/Trainer.jl")
@@ -33,6 +34,9 @@ include("runners/PlotRunner.jl")
 using .PlotRunner
 
 export ScoreUNetConfig, ScoreUNet, build_unet, PeriodicConv1D,
+    L96SchneiderScoreConfig, L96SchneiderScoreModel, L96SchneiderLegacyAdapter,
+    build_l96_schneider_model, build_l96_schneider_legacy_model,
+    broadcast_X_to_fast, blockmean_fast_to_slow,
     NormalizedDataset, DataStats, load_hdf5_dataset, get_batch,
     ScoreTrainerConfig, TrainingHistory, train!, score_from_model,
     CorrelationConfig, CorrelationInfo, compute_correlation_info,

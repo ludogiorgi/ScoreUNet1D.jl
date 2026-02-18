@@ -3,7 +3,9 @@ using Random
 using TOML
 
 include(joinpath(@__DIR__, "run_layout.jl"))
+include(joinpath(@__DIR__, "SchneiderTopology.jl"))
 using .L96RunLayout
+using .L96SchneiderTopology: mod1idx, linidx, jk_from_lin, wrap_lin, validate_twisted_mapping
 
 const PIPELINE_MODE = lowercase(get(ENV, "L96_PIPELINE_MODE", "false")) == "true"
 const K = parse(Int, get(ENV, "L96_K", "36"))
@@ -12,6 +14,7 @@ const F = parse(Float64, get(ENV, "L96_F", "10.0"))
 const H = parse(Float64, get(ENV, "L96_H", "1.0"))
 const C = parse(Float64, get(ENV, "L96_C", "10.0"))
 const B_PARAM = parse(Float64, get(ENV, "L96_B", "10.0"))
+const COUPLING_SCALE = H * C / J
 
 const DT = parse(Float64, get(ENV, "L96_DT", "0.005"))
 const SPINUP_STEPS = parse(Int, get(ENV, "L96_SPINUP_STEPS", "20000"))
@@ -34,30 +37,45 @@ end
 const OUTPUT_PATH = get(ENV, "L96_DATA_PATH", L96RunLayout.default_data_path(RUN_DIR))
 const DATASET_PARAMS_TOML_PATH = strip(get(ENV, "L96_DATASET_PARAMS_TOML_PATH", ""))
 
-mod1idx(i::Int, n::Int) = mod(i - 1, n) + 1
+"""
+    l96_two_scale_drift!(dx, dy, x, y)
 
+Two-scale Lorenz-96 drift following Schneider et al. (2017) GRL Eqs. (11-13):
+- slow/fast coupling scale is `h*c/J`,
+- fast variables use twisted periodicity `Y_{j+J,k} = Y_{j,k+1}` by indexing a
+  single ring of length `K*J`,
+- slow variables keep periodicity `X_{k+K} = X_k`.
+"""
 function l96_two_scale_drift!(dx::AbstractVector{Float64},
                               dy::AbstractMatrix{Float64},
                               x::AbstractVector{Float64},
                               y::AbstractMatrix{Float64})
-    coupling_scale = H * C / B_PARAM
-
     @inbounds for k in 1:K
         km2 = mod1idx(k - 2, K)
         km1 = mod1idx(k - 1, K)
         kp1 = mod1idx(k + 1, K)
 
-        coupling = coupling_scale * sum(@view y[:, k])
+        coupling = COUPLING_SCALE * sum(@view y[:, k])
         dx[k] = x[km1] * (x[kp1] - x[km2]) - x[k] + F - coupling
     end
 
     @inbounds for k in 1:K
-        xk_term = coupling_scale * x[k]
+        xk_term = COUPLING_SCALE * x[k]
         for j in 1:J
-            jm1 = mod1idx(j - 1, J)
-            jp1 = mod1idx(j + 1, J)
-            jp2 = mod1idx(j + 2, J)
-            dy[j, k] = C * B_PARAM * y[jp1, k] * (y[jm1, k] - y[jp2, k]) - C * y[j, k] + xk_term
+            ell = linidx(j, k, J)
+            ellp1 = wrap_lin(ell + 1, K, J)
+            ellm1 = wrap_lin(ell - 1, K, J)
+            ellp2 = wrap_lin(ell + 2, K, J)
+
+            jp1, kp1 = jk_from_lin(ellp1, J)
+            jm1, km1 = jk_from_lin(ellm1, J)
+            jp2, kp2 = jk_from_lin(ellp2, J)
+
+            y_p1 = y[jp1, kp1]
+            y_m1 = y[jm1, km1]
+            y_p2 = y[jp2, kp2]
+
+            dy[j, k] = C * B_PARAM * y_p1 * (y_m1 - y_p2) - C * y[j, k] + xk_term
         end
     end
 
@@ -87,6 +105,12 @@ function rk4_step!(x::Vector{Float64},
     return nothing
 end
 
+"""
+    add_process_noise!(x, y, rng, sigma, dt)
+
+Adds additive process noise after each deterministic RK4 step. Set
+`PROCESS_NOISE_SIGMA=0` for deterministic Schneider dynamics.
+"""
 function add_process_noise!(x::Vector{Float64},
                             y::Matrix{Float64},
                             rng::AbstractRNG,
@@ -126,12 +150,13 @@ function write_snapshot!(dest::AbstractMatrix{Float32},
 end
 
 function generate_l96_dataset()
+    validate_twisted_mapping(K, J) || error("Twisted fast-ring mapping validation failed for K=$K, J=$J")
     rng = MersenneTwister(RNG_SEED)
     x = F .+ 0.1 .* randn(rng, Float64, K)
     y = 0.1 .* randn(rng, Float64, J, K)
     ws = make_workspace()
 
-    @info "Spin-up started" steps = SPINUP_STEPS dt = DT process_noise_sigma = PROCESS_NOISE_SIGMA
+    @info "Spin-up started (Schneider Eq. 11-13 drift with optional additive process noise)" steps = SPINUP_STEPS dt = DT process_noise_sigma = PROCESS_NOISE_SIGMA deterministic = (PROCESS_NOISE_SIGMA == 0.0)
     for _ in 1:SPINUP_STEPS
         rk4_step!(x, y, DT, ws)
         add_process_noise!(x, y, rng, PROCESS_NOISE_SIGMA, DT)
@@ -169,6 +194,10 @@ function save_dataset(raw::Array{Float32,3})
         attrs["spinup_steps"] = Int(SPINUP_STEPS)
         attrs["save_every"] = Int(SAVE_EVERY)
         attrs["process_noise_sigma"] = Float64(PROCESS_NOISE_SIGMA)
+        attrs["dynamics_reference"] = "Schneider et al. (2017) Eqs. (11-13)"
+        attrs["coupling_scale"] = "h*c/J"
+        attrs["fast_topology"] = "twisted_ring_KJ"
+        attrs["stochastic_process_noise"] = PROCESS_NOISE_SIGMA > 0.0
     end
     return OUTPUT_PATH
 end
@@ -194,6 +223,10 @@ function save_dataset_params_toml(raw::Array{Float32,3}, out_path::AbstractStrin
             "nsamples" => NSAMPLES,
             "rng_seed" => RNG_SEED,
             "process_noise_sigma" => PROCESS_NOISE_SIGMA,
+            "dynamics_reference" => "Schneider et al. (2017) Eqs. (11-13)",
+            "coupling_scale" => "h*c/J",
+            "fast_topology" => "Y_{j+J,k}=Y_{j,k+1}",
+            "stochastic_process_noise" => PROCESS_NOISE_SIGMA > 0.0,
         ),
     )
     mkpath(dirname(DATASET_PARAMS_TOML_PATH))
@@ -225,6 +258,10 @@ function save_generation_config(raw::Array{Float32,3}, out_path::AbstractString)
             "nsamples" => NSAMPLES,
             "rng_seed" => RNG_SEED,
             "process_noise_sigma" => PROCESS_NOISE_SIGMA,
+            "dynamics_reference" => "Schneider et al. (2017) Eqs. (11-13)",
+            "coupling_scale" => "h*c/J",
+            "fast_topology" => "Y_{j+J,k}=Y_{j,k+1}",
+            "stochastic_process_noise" => PROCESS_NOISE_SIGMA > 0.0,
         ),
     )
     config_path = L96RunLayout.default_config_path(RUN_DIR, "generate_data")
@@ -254,6 +291,10 @@ if !PIPELINE_MODE
             "nsamples" => NSAMPLES,
             "rng_seed" => RNG_SEED,
             "process_noise_sigma" => PROCESS_NOISE_SIGMA,
+            "dynamics_reference" => "Schneider et al. (2017) Eqs. (11-13)",
+            "coupling_scale" => "h*c/J",
+            "fast_topology" => "Y_{j+J,k}=Y_{j,k+1}",
+            "stochastic_process_noise" => PROCESS_NOISE_SIGMA > 0.0,
         ),
         paths=Dict(
             "data_path" => abspath(out_path),

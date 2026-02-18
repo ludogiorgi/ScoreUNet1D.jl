@@ -1,14 +1,13 @@
 [run]
-J = 10
+J = 4
 runs_root = "scripts/L96"
 run_folder_prefix = "runs_J"
 run_id_padding = 3
 seed = 7
 
 [data]
-# `path` is overwritten by the pipeline to the J-indexed observations repository path.
-path = "scripts/L96/observations/J10/l96_timeseries.hdf5"
-observations_root = "scripts/L96/observations"
+path = "scripts/L96/observations_smoke/J4/l96_timeseries.hdf5"
+observations_root = "scripts/L96/observations_smoke"
 dataset_filename = "l96_timeseries.hdf5"
 integration_params_filename = "integration_params.toml"
 dataset_key = "timeseries"
@@ -16,32 +15,32 @@ normalization_mode = "split_xy"
 generate_if_missing = true
 
 [data.generation]
-K = 36
+K = 12
 F = 10.0
 h = 1.0
 c = 10.0
 b = 10.0
 dt = 0.005
-spinup_steps = 20_000
-save_every = 20
-nsamples = 200_000
+spinup_steps = 500
+save_every = 2
+nsamples = 2000
 process_noise_sigma = 0.03
 rng_seed = 7
 
 [train]
 device = "GPU:0"
-num_training_epochs = 20
-batch_size = 128
+num_training_epochs = 1
+batch_size = 64
 lr = 8e-4
 sigma = 0.1
-base_channels = 32
-channel_multipliers = [1, 2]
+base_channels = 16
+channel_multipliers = [1]
 model_arch = "schneider_dualstream"
 progress = false
-use_lr_schedule = true
-warmup_steps = 500
+use_lr_schedule = false
+warmup_steps = 0
 min_lr_factor = 0.1
-norm_type = "batch"
+norm_type = "group"
 norm_groups = 0
 
 [train.loss]
@@ -49,40 +48,42 @@ x_weight = 1.0
 y_weight = 1.0
 
 [train.ema]
-enabled = true
+enabled = false
 decay = 0.999
-use_for_eval = true
+use_for_eval = false
 
 [train.kl_eval]
-enabled = true
-kl_eval_interval_epochs = 10
+enabled = false
+kl_eval_interval_epochs = 1
 
 [langevin]
 device = "GPU:0"
 dt = 0.0025
-resolution = 40
-nsteps = 400_000
-burn_in = 400
-ensembles = 64
-pdf_bins = 60
+resolution = 10
+nsteps = 200
+burn_in = 50
+ensembles = 4
+pdf_bins = 30
 use_boundary = true
 boundary_min = -8.0
 boundary_max = 8.0
-min_kept_snapshots_warn = 800
-eval_profile = "full"
+min_kept_snapshots_warn = 5
+eval_profile = "quick"
+progress = false
 
 [langevin.quick]
 dt = 0.0025
-resolution = 40
-nsteps = 8_000
-burn_in = 200
-ensembles = 32
+resolution = 10
+nsteps = 200
+burn_in = 50
+ensembles = 4
 
 [figures]
-dpi = 110
+dpi = 100
 style = "publication"
 
 [output]
-save_checkpoints = true
-checkpoint_every = 10
-save_per_epoch_eval = true
+save_checkpoints = false
+checkpoint_every = 1
+save_per_epoch_eval = false
+

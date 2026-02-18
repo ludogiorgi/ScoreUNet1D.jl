@@ -1,16 +1,20 @@
 [integration]
-spinup_steps = 20000
-J = 10
 c = 10.0
-save_every = 20
-process_noise_sigma = 0.03
+stochastic_process_noise = true
 b = 10.0
 dt = 0.005
-K = 36
 h = 1.0
+coupling_scale = "h*c/J"
+fast_topology = "twisted_ring_KJ"
+dynamics_reference = "Schneider et al. (2017) Eqs. (11-13)"
+spinup_steps = 20000
+process_noise_sigma = 0.03
+J = 10
+save_every = 20
+K = 36
 F = 10.0
 
 [dataset]
 key = "timeseries"
-shape = [1000000, 11, 36]
+shape = [200000, 11, 36]
 path = "/home/ludogio/Documents/JuliaProjects/ScoreUNet1D.jl/scripts/L96/observations/J10/l96_timeseries.hdf5"

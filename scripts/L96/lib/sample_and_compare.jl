@@ -1040,7 +1040,13 @@ function main()
     @info "Mode-wise univariate metrics (raw)" avg_mode_kl = avg_mode_kl_raw max_mode_kl = max_mode_kl_raw avg_x_kl = avg_x_kl_raw avg_y_kl = avg_y_kl_raw avg_mode_js = avg_mode_js_raw avg_mode_l1 = avg_mode_l1_raw
     @info "Score prediction diagnostics" mse = score_diag.mse corr = score_diag.corr
     avg_mode_kl_clip <= TARGET_AVG_KL || @warn "Average clipped mode-wise KL is above target" avg_mode_kl = avg_mode_kl_clip target = TARGET_AVG_KL
-    @info "Loaded cfg channels" in_channels = cfg.in_channels out_channels = cfg.out_channels
+    if hasproperty(cfg, :in_channels) && hasproperty(cfg, :out_channels)
+        @info "Loaded model cfg channels" in_channels = getproperty(cfg, :in_channels) out_channels = getproperty(cfg, :out_channels)
+    elseif hasproperty(cfg, :K) && hasproperty(cfg, :J)
+        @info "Loaded Schneider model cfg" K = getproperty(cfg, :K) J = getproperty(cfg, :J)
+    else
+        @info "Loaded model cfg type" cfg_type = string(typeof(cfg))
+    end
 end
 
 main()

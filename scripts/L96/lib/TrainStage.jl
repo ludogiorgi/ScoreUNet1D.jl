@@ -56,6 +56,7 @@ function run_training!(params::Dict{String,Any}, dirs::Dict{String,String}; base
     env["L96_TRAIN_NOISE_SIGMA"] = string(params["train.sigma"])
     env["L96_BASE_CHANNELS"] = string(params["train.base_channels"])
     env["L96_CHANNEL_MULTIPLIERS"] = join(string.(params["train.channel_multipliers"]), ",")
+    env["L96_MODEL_ARCH"] = params["train.model_arch"]
     env["L96_NORMALIZATION_MODE"] = params["data.normalization_mode"]
     env["L96_PROGRESS"] = params["train.progress"] ? "true" : "false"
     env["L96_USE_LR_SCHEDULE"] = params["train.use_lr_schedule"] ? "true" : "false"

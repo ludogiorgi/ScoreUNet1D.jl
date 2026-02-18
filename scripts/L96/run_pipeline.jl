@@ -152,6 +152,14 @@ function read_dataset_metadata(path::AbstractString, dataset_key::AbstractString
                 out[k] = Float64(read(attrs[k]))
             end
         end
+        for k in ("dynamics_reference", "coupling_scale", "fast_topology")
+            if haskey(attrs, k)
+                out[k] = String(read(attrs[k]))
+            end
+        end
+        if haskey(attrs, "stochastic_process_noise")
+            out["stochastic_process_noise"] = Bool(read(attrs["stochastic_process_noise"]))
+        end
         return out
     end
 end
@@ -168,6 +176,10 @@ function expected_dataset_metadata(params::Dict{String,Any})
         "spinup_steps" => Int(params["data.generation.spinup_steps"]),
         "save_every" => Int(params["data.generation.save_every"]),
         "process_noise_sigma" => Float64(params["data.generation.process_noise_sigma"]),
+        "dynamics_reference" => "Schneider et al. (2017) Eqs. (11-13)",
+        "coupling_scale" => "h*c/J",
+        "fast_topology" => "twisted_ring_KJ",
+        "stochastic_process_noise" => Float64(params["data.generation.process_noise_sigma"]) > 0.0,
         "shape" => (
             Int(params["data.generation.nsamples"]),
             Int(params["run.J"]) + 1,
