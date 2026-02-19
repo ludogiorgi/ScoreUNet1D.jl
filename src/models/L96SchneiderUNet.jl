@@ -4,6 +4,9 @@ Configuration for the Schneider-topology dual-stream score model.
 The slow stream lives on a ring of length `K`, while the fast stream lives on a
 single twisted ring of length `K*J`.
 """
+_ensure_f32(x::AbstractArray{Float32}) = x
+_ensure_f32(x::AbstractArray) = Float32.(x)
+
 Base.@kwdef mutable struct L96SchneiderScoreConfig
     K::Int = 36
     J::Int = 10
@@ -100,7 +103,7 @@ end
 function broadcast_X_to_fast(x::AbstractArray{<:Real,3}, J::Int)
     size(x, 2) == 1 || throw(ArgumentError("Expected slow tensor with one channel, got size $(size(x))"))
     J > 0 || throw(ArgumentError("J must be positive, got $J"))
-    x32 = Float32.(x)
+    x32 = _ensure_f32(x)
     return NNlib.upsample_nearest(x32, (J,))
 end
 
@@ -108,7 +111,7 @@ function channelized_fast_to_flat(y::AbstractArray{<:Real,3})
     K = size(y, 1)
     J = size(y, 2)
     B = size(y, 3)
-    y32 = Float32.(y)
+    y32 = _ensure_f32(y)
     # Convert (K, J, B) to (J, K, B), then flatten J within each K block.
     yjk = permutedims(y32, (2, 1, 3))
     return reshape(yjk, K * J, 1, B)
@@ -120,7 +123,7 @@ function flat_fast_to_channelized(y_flat::AbstractArray{<:Real,3}, J::Int)
     B = size(y_flat, 3)
     L % J == 0 || throw(ArgumentError("Fast ring length $L must be divisible by J=$J"))
     K = div(L, J)
-    y32 = Float32.(y_flat)
+    y32 = _ensure_f32(y_flat)
     yjk = reshape(y32, J, K, B)
     return permutedims(yjk, (2, 1, 3))
 end
@@ -149,7 +152,7 @@ function blockmean_fast_to_slow(y_flat::AbstractArray{<:Real,3}, J::Int)
     L % J == 0 || throw(ArgumentError("Fast ring length $L must be divisible by J=$J"))
     K = div(L, J)
     B = size(y_flat, 3)
-    y32 = Float32.(y_flat)
+    y32 = _ensure_f32(y_flat)
     yjk = reshape(y32, J, K, B)
     ymean = mean(yjk; dims=1)
     return permutedims(ymean, (2, 1, 3))
@@ -167,8 +170,8 @@ function (model::L96SchneiderScoreModel)(x_slow::AbstractArray{<:Real,3},
     x_up = broadcast_X_to_fast(x_slow, model.J)
     y_bar = blockmean_fast_to_slow(y_fast, model.J)
 
-    slow_in = cat(Float32.(x_slow), y_bar; dims=2)
-    fast_in = cat(Float32.(y_fast), x_up; dims=2)
+    slow_in = cat(_ensure_f32(x_slow), y_bar; dims=2)
+    fast_in = cat(_ensure_f32(y_fast), x_up; dims=2)
 
     score_x = model.slow_net(slow_in)
     score_y = model.fast_net(fast_in)
@@ -184,7 +187,7 @@ function (adapter::L96SchneiderLegacyAdapter)(state::AbstractArray{<:Real,3})
     size(state, 2) == adapter.J + 1 ||
         throw(ArgumentError("Expected legacy tensor with channels J+1=$(adapter.J + 1), got size $(size(state))"))
 
-    x_slow = Float32.(@view state[:, 1:1, :])
+    x_slow = _ensure_f32(@view state[:, 1:1, :])
     y_channelized = @view state[:, 2:(adapter.J + 1), :]
     y_fast = channelized_fast_to_flat(y_channelized)
 

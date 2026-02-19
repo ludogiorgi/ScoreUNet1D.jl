@@ -5,6 +5,7 @@ end
 using BSON
 using Flux
 using HDF5
+using Functors
 using Random
 using ScoreUNet1D
 using Statistics
@@ -473,9 +474,9 @@ function main()
         Flux.testmode!(model_cpu_epoch)
 
         if ema_model_cpu !== nothing
-            ema_model_cpu = Flux.fmap(ema_model_cpu, model_cpu_epoch) do a, b
+            Functors.fmap(ema_model_cpu, model_cpu_epoch) do a, b
                 if a isa AbstractArray && b isa AbstractArray
-                    return ema_decay_epoch .* a .+ Float32(1 - ema_decay_epoch) .* b
+                    @. a = ema_decay_epoch * a + Float32(1 - ema_decay_epoch) * b
                 end
                 return a
             end

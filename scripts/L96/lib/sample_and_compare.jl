@@ -797,7 +797,6 @@ function main()
 
     device, effective_device_name = resolve_langevin_device(LANGEVIN_DEVICE_NAME)
     model = move_model(model, is_gpu(device) ? device : ScoreUNet1D.CPUDevice())
-    Flux.testmode!(model)
     eval_config_path = save_eval_config(RUN_DIR, EVAL_ROOT, effective_device_name, trainer_cfg.sigma)
 
     langevin_cfg = LangevinConfig(

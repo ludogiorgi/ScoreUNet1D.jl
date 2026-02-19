@@ -62,20 +62,21 @@ device = "GPU:0"
 dt = 0.0025
 resolution = 40
 nsteps = 400_000
-burn_in = 400
+burn_in = 40_000
 ensembles = 64
 pdf_bins = 60
 use_boundary = true
 boundary_min = -8.0
 boundary_max = 8.0
 min_kept_snapshots_warn = 800
+progress = false
 eval_profile = "full"
 
 [langevin.quick]
 dt = 0.0025
 resolution = 40
 nsteps = 8_000
-burn_in = 200
+burn_in = 2_000
 ensembles = 32
 
 [figures]

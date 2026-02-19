@@ -91,11 +91,14 @@ function train_single_device!(model, dataset::NormalizedDataset, cfg::ScoreTrain
     # Pre-allocate buffers to avoid allocation in loop
     batch_gpu_buffer = nothing
     noise_gpu_buffer = nothing
+    noisy_gpu_buffer = nothing
     noise_cpu_buffer = Array{Float32}(undef, L, C, cfg.batch_size)
 
     if device isa GPUDevice
+        CUDA.seed!(UInt64(cfg.seed))
         batch_gpu_buffer = CUDA.CuArray{Float32}(undef, L, C, cfg.batch_size)
         noise_gpu_buffer = CUDA.CuArray{Float32}(undef, L, C, cfg.batch_size)
+        noisy_gpu_buffer = CUDA.CuArray{Float32}(undef, L, C, cfg.batch_size)
     end
 
     # Channel-wise denoising loss weighting:
@@ -167,7 +170,6 @@ function train_single_device!(model, dataset::NormalizedDataset, cfg::ScoreTrain
                 batch = batch_view_gpu
 
                 noise_view_gpu = view(noise_gpu_buffer, :, :, 1:current_batch_size)
-                CUDA.seed!(UInt64(cfg.seed + global_step))
                 CUDA.randn!(noise_view_gpu)
                 noise = noise_view_gpu
             else
@@ -185,7 +187,13 @@ function train_single_device!(model, dataset::NormalizedDataset, cfg::ScoreTrain
                 end
             end
 
-            noisy = batch .+ cfg.sigma .* noise
+            if device isa GPUDevice
+                noisy_view = view(noisy_gpu_buffer, :, :, 1:current_batch_size)
+                @. noisy_view = batch + cfg.sigma * noise
+                noisy = noisy_view
+            else
+                noisy = batch .+ cfg.sigma .* noise
+            end
 
             # Scale loss by accumulation steps for proper gradient magnitude
             loss, grads = Flux.withgradient(model_on_device) do m

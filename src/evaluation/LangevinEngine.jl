@@ -174,9 +174,7 @@ function get_cached_wrapper(model, sigma::Float32, L::Int, C::Int, dim::Int, dev
     return get!(SCORE_WRAPPER_CACHE, key) do
         # Move model to target device once, then create wrapper
         model_on_device = if device_str == "cpu"
-            m = Flux.cpu(model)
-            Flux.testmode!(m)  # Set testmode once
-            m
+            Flux.cpu(model)
         else
             model  # GPU path handles this in EnsembleIntegrator
         end
@@ -193,11 +191,9 @@ function run_langevin(model, dataset::NormalizedDataset, cfg::LangevinConfig,
     dim = L * C
     n_ens = max(cfg.n_ensembles, 1)
 
-    # Use identity matrices for Phi and Sigma in this setup.
-    # Keep everything in Float32 to match the score model and avoid
-    # unnecessary conversions inside the integrator.
-    Phi = Matrix{Float32}(I, dim, dim)
-    Sigma = Matrix{Float32}(I, dim, dim)
+    # Identity operators are handled by em_step! fast paths.
+    Phi = nothing
+    Sigma = nothing
 
     # Derive integration schedule from config
     dt = cfg.dt

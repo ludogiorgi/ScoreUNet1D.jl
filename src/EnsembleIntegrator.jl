@@ -13,6 +13,35 @@ const MULTI_GPU_MESSAGE_PRINTED = Ref(false)
 const SINGLE_GPU_MESSAGE_PRINTED = Ref(false)
 const CPU_MESSAGE_PRINTED = Ref(false)
 
+_is_identity(::Nothing) = true
+_is_identity(::UniformScaling) = true
+function _is_identity(M::AbstractMatrix)
+    size(M, 1) == size(M, 2) || return false
+    dim = size(M, 1)
+    @inbounds for j in 1:dim, i in 1:dim
+        expected = i == j ? one(eltype(M)) : zero(eltype(M))
+        M[i, j] == expected || return false
+    end
+    return true
+end
+
+function _cpu_operator(M)
+    _is_identity(M) && return nothing
+    return M isa Union{UpperTriangular, LowerTriangular} ? M : Array(M)
+end
+
+function _gpu_operator(M)
+    _is_identity(M) && return nothing
+    if M isa UpperTriangular
+        return UpperTriangular(CUDA.cu(Matrix(M)))
+    elseif M isa LowerTriangular
+        return LowerTriangular(CUDA.cu(Matrix(M)))
+    elseif M isa CUDA.CuArray
+        return M
+    end
+    return CUDA.cu(Matrix(M))
+end
+
 # --- 1. Memory Cache for Zero-Allocation Steps ---
 
 # Per-wrapper CPU integration state
@@ -43,6 +72,22 @@ struct IntegratorCache{M1, M2}
     noise::M2        # Stores Gaussian noise
     diff_term::M2    # Stores Sigma * noise
 end
+
+struct BoundaryWorkspace{V,C}
+    violation_mask::V
+    col_flags::C
+    col_flags_host::Vector{Bool}
+end
+
+function BoundaryWorkspace(x::CUDA.CuArray)
+    dim, n_ens = size(x)
+    violation_mask = CUDA.zeros(Bool, dim, n_ens)
+    col_flags = CUDA.zeros(Bool, n_ens)
+    col_flags_host = Vector{Bool}(undef, n_ens)
+    return BoundaryWorkspace(violation_mask, col_flags, col_flags_host)
+end
+
+BoundaryWorkspace(x::AbstractMatrix) = nothing
 
 # Progress helpers (throttled updates to avoid CPU/GPU sync overhead)
 const MAX_PROGRESS_UPDATES = 200
@@ -89,6 +134,14 @@ function setup_cache(x::AbstractMatrix, s_model)
     return IntegratorCache(drift_out, drift_term, noise, diff_term)
 end
 
+@inline function _apply_step!(x, drift, diffusion, dt, sq_2dt)
+    T = eltype(x)
+    dt_T = T(dt)
+    sq_2dt_T = T(sq_2dt)
+    @. x += (dt_T * drift) + (sq_2dt_T * diffusion)
+    return nothing
+end
+
 # --- 2. The Core Stepper (Euler-Maruyama) ---
 """
     em_step!(x, cache, s_model, Phi, Sigma, dt, sq_2dt)
@@ -107,12 +160,32 @@ function em_step!(x::AbstractMatrix, cache::IntegratorCache, s_model, Phi, Sigma
     mul!(cache.diff_term, Sigma, cache.noise)
 
     # 4. Update
-    # Precision Fix: Ensure dt/sq_2dt match the array type (usually Float32)
-    T = eltype(x)
-    dt_T = T(dt)
-    sq_2dt_T = T(sq_2dt)
-    
-    @. x += (dt_T * cache.drift_term) + (sq_2dt_T * cache.diff_term)
+    _apply_step!(x, cache.drift_term, cache.diff_term, dt, sq_2dt)
+    return nothing
+end
+
+function em_step!(x::AbstractMatrix, cache::IntegratorCache, s_model, ::Nothing, ::Nothing, dt, sq_2dt)
+    copyto!(cache.drift_out, s_model(x))
+    copyto!(cache.drift_term, cache.drift_out)
+    randn!(cache.noise)
+    _apply_step!(x, cache.drift_term, cache.noise, dt, sq_2dt)
+    return nothing
+end
+
+function em_step!(x::AbstractMatrix, cache::IntegratorCache, s_model, ::Nothing, Sigma, dt, sq_2dt)
+    copyto!(cache.drift_out, s_model(x))
+    copyto!(cache.drift_term, cache.drift_out)
+    randn!(cache.noise)
+    mul!(cache.diff_term, Sigma, cache.noise)
+    _apply_step!(x, cache.drift_term, cache.diff_term, dt, sq_2dt)
+    return nothing
+end
+
+function em_step!(x::AbstractMatrix, cache::IntegratorCache, s_model, Phi, ::Nothing, dt, sq_2dt)
+    copyto!(cache.drift_out, s_model(x))
+    mul!(cache.drift_term, Phi, cache.drift_out)
+    randn!(cache.noise)
+    _apply_step!(x, cache.drift_term, cache.noise, dt, sq_2dt)
     return nothing
 end
 
@@ -249,12 +322,12 @@ function evolve_sde(s_model,
             # allocations and model deep-copies across calls.
             state = get!(GPU_STATE_CACHE, s_model) do
                 x_gpu = CUDA.cu(x0)
-                Phi_gpu = CUDA.cu(Phi)
-                Sigma_gpu = Sigma isa UpperTriangular ? UpperTriangular(CUDA.cu(Matrix(Sigma))) :
-                             Sigma isa LowerTriangular ? LowerTriangular(CUDA.cu(Matrix(Sigma))) :
-                             CUDA.cu(Matrix(Sigma))
+                Phi_gpu = _gpu_operator(Phi)
+                Sigma_gpu = _gpu_operator(Sigma)
 
                 model_gpu = Flux.gpu(s_model)
+                # Canonical testmode! — all other callers should NOT set testmode
+                # because the integrator caches the model and owns its lifecycle.
                 Flux.testmode!(model_gpu)
 
                 cache = setup_cache(x_gpu, model_gpu)
@@ -281,8 +354,8 @@ function evolve_sde(s_model,
     # and model deep-copies across calls.
     state = get!(CPU_STATE_CACHE, s_model) do
         x_curr = Array(x0)
-        Phi_cpu = Array(Phi)
-        Sigma_cpu = Sigma isa Union{UpperTriangular, LowerTriangular} ? Sigma : Array(Sigma)
+        Phi_cpu = _cpu_operator(Phi)
+        Sigma_cpu = _cpu_operator(Sigma)
 
         model_cpu = Flux.cpu(s_model)
         # Work on a dedicated copy to decouple from any training model
@@ -315,12 +388,12 @@ snapshot states at regular intervals. The state `x0` is a matrix of size
 `(dim, n_ensembles)`. The result is an array of size `(dim, n_snapshots, n_ensembles)`,
 where `n_snapshots` is determined by `n_steps`, `burn_in`, and `resolution`.
 
-If `boundary` is provided as a tuple `(min, max)`, then on each Euler–Maruyama
-step a simple reflecting condition is enforced: whenever a state component
-leaves the interval, the corresponding ensemble member is reset to its initial
-condition `x0`. The total number of such resets is reported via an
-informational log message. This behaviour is supported on both the CPU and GPU
-paths.
+If `boundary` is provided as a tuple `(min, max)`, a simple reflecting
+condition is enforced on the snapshot cadence (`resolution` steps): whenever a
+state component leaves the interval, the corresponding ensemble member is reset
+to its initial condition `x0`. The total number of such resets is reported via
+an informational log message. This behaviour is supported on both the CPU and
+GPU paths.
 
 This function reuses the optimized device-specific caches and model copies
 from [`evolve_sde`] for efficiency and scalability. Set `progress=true` (or
@@ -374,12 +447,12 @@ function evolve_sde_snapshots(s_model,
             # Reuse cached GPU state per score wrapper
             state = get!(GPU_STATE_CACHE, s_model) do
                 x_gpu = CUDA.cu(x0)
-                Phi_gpu = CUDA.cu(Phi)
-                Sigma_gpu = Sigma isa UpperTriangular ? UpperTriangular(CUDA.cu(Matrix(Sigma))) :
-                             Sigma isa LowerTriangular ? LowerTriangular(CUDA.cu(Matrix(Sigma))) :
-                             CUDA.cu(Matrix(Sigma))
+                Phi_gpu = _gpu_operator(Phi)
+                Sigma_gpu = _gpu_operator(Sigma)
 
                 model_gpu = Flux.gpu(s_model)
+                # Canonical testmode! — all other callers should NOT set testmode
+                # because the integrator caches the model and owns its lifecycle.
                 Flux.testmode!(model_gpu)
 
                 cache = setup_cache(x_gpu, model_gpu)
@@ -392,21 +465,24 @@ function evolve_sde_snapshots(s_model,
             # boundary enforcement. This is kept local to the call to
             # avoid assumptions about reuse of x0 across runs.
             x0_gpu = copy(state.x)
+            bws = boundary !== nothing ? BoundaryWorkspace(state.x) : nothing
+            traj_gpu = CUDA.CuArray{eltype(state.x)}(undef, dim, keep_snapshots, n_ens)
 
             snapshot_idx = 0
             p, stride, owns = init_progress(total_steps; progress = progress, desc = desc_gpu)
             for step in 1:total_steps
                 em_step!(state.x, state.cache, state.model, state.Phi, state.Sigma, dt, sq_2dt)
-                if boundary !== nothing
-                    enforce_boundary!(state.x, x0_gpu, boundary, reset_counter)
+                if boundary !== nothing && step % steps_per_snapshot == 0
+                    enforce_boundary!(state.x, x0_gpu, boundary, reset_counter, bws)
                 end
                 if step > burn_in_steps && step % steps_per_snapshot == 0
                     snapshot_idx += 1
-                    @inbounds traj[:, snapshot_idx, :] .= Array(state.x)
+                    @views @inbounds traj_gpu[:, snapshot_idx, :] .= state.x
                 end
                 tick_progress!(p, step, stride, total_steps)
             end
             finish_progress!(p, owns)
+            copyto!(traj, Array(traj_gpu))
 
             if boundary !== nothing
                 @info "Boundary resets during SDE integration" resets=reset_counter[]
@@ -426,8 +502,8 @@ function evolve_sde_snapshots(s_model,
 
     state = get!(CPU_STATE_CACHE, s_model) do
         x_curr = Array(x0)
-        Phi_cpu = Array(Phi)
-        Sigma_cpu = Sigma isa Union{UpperTriangular, LowerTriangular} ? Sigma : Array(Sigma)
+        Phi_cpu = _cpu_operator(Phi)
+        Sigma_cpu = _cpu_operator(Sigma)
 
         model_cpu = Flux.cpu(s_model)
         model_cpu = deepcopy(model_cpu)
@@ -443,7 +519,7 @@ function evolve_sde_snapshots(s_model,
     p, stride, owns = init_progress(total_steps; progress = progress, desc = desc_cpu)
     for step in 1:total_steps
         em_step!(state.x, state.cache, state.model, state.Phi, state.Sigma, dt, sq_2dt)
-        if boundary !== nothing
+        if boundary !== nothing && step % steps_per_snapshot == 0
             enforce_boundary!(state.x, x0, boundary, reset_counter)
         end
         if step > burn_in_steps && step % steps_per_snapshot == 0
@@ -499,20 +575,18 @@ end
 function enforce_boundary!(x::CUDA.CuArray{T,2},
                            x0::CUDA.CuArray{T,2},
                            boundary::Tuple{<:Real,<:Real},
-                           reset_counter::Base.RefValue{Int}) where {T<:Real}
+                           reset_counter::Base.RefValue{Int},
+                           ws::BoundaryWorkspace) where {T<:Real}
     lo, hi = boundary
     lo_T = T(lo)
     hi_T = T(hi)
 
-    # Compute, on the GPU, which columns have at least one out-of-bounds
-    # entry, then bring that small mask back to the CPU and reset full
-    # columns via GPU broadcasts.
-    viol = (x .< lo_T) .| (x .> hi_T)
-    col_violation = vec(reduce(|, viol; dims=1))
-    col_violation_host = Array(col_violation)
+    ws.violation_mask .= (x .< lo_T) .| (x .> hi_T)
+    ws.col_flags .= vec(reduce(|, ws.violation_mask; dims=1))
+    copyto!(ws.col_flags_host, ws.col_flags)
 
     local_resets = 0
-    @inbounds for (j, do_reset) in pairs(col_violation_host)
+    @inbounds for (j, do_reset) in pairs(ws.col_flags_host)
         if do_reset
             @views x[:, j] .= x0[:, j]
             local_resets += 1
@@ -521,6 +595,14 @@ function enforce_boundary!(x::CUDA.CuArray{T,2},
 
     reset_counter[] += local_resets
     return nothing
+end
+
+function enforce_boundary!(x::CUDA.CuArray{T,2},
+                           x0::CUDA.CuArray{T,2},
+                           boundary::Tuple{<:Real,<:Real},
+                           reset_counter::Base.RefValue{Int}) where {T<:Real}
+    ws = BoundaryWorkspace(x)
+    return enforce_boundary!(x, x0, boundary, reset_counter, ws)
 end
 
 """
