@@ -1,0 +1,74 @@
+[paths]
+run_dir = "scripts/L96/runs_J10/run_047"
+checkpoint_epoch = 8
+checkpoint_path = ""
+output_root = "scripts/L96/responses_results"
+run_prefix = "run_"
+
+[integration]
+K = 36
+J = 10
+F = 10.0
+h = 1.0
+c = 10.0
+b = 10.0
+dt = 0.005
+save_every = 5
+process_noise_sigma = 0.05
+stochastic_x_noise = false
+
+[dataset]
+path = "scripts/L96/observations/J10/l96_timeseries_save20_200k.hdf5"
+key = "timeseries"
+attr_sync_mode = "warn"
+
+[methods]
+# Toggle any subset of methods. Example:
+# gaussian = true, unet = true, numerical = true
+# To run only method 3, keep only numerical=true.
+gaussian = true
+unet = true
+numerical = true
+calculate_impulse_response = true
+
+[gfdt]
+nsamples = 150000
+start_index = 50001
+response_tmax = 6.0
+score_batch_size = 2048
+score_device = "auto"
+score_forward_mode = "train"
+mean_center = true
+
+[numerical]
+ensembles = 16384
+start_index = 80001
+seed_base = 920000
+method = "finite_difference"
+h_rel = 0.01
+h_abs = [0.05, 0.02, 0.05, 0.05] # [F,h,c,b]
+
+[correction]
+ridge = 1.0e-8
+max_deviation = 10.0
+
+[resources]
+# Used only when gfdt.unet=true and gfdt.score_device="auto".
+auto_gpu_max_mem_fraction = 0.25
+auto_gpu_max_utilization = 20.0
+auto_gpu_min_free_mb = 2048.0
+
+[reference]
+# High-precision cache used for gaussian and numerical baselines.
+cache_root = "scripts/L96/reference_responses_cache"
+force_regenerate = false
+gfdt_nsamples = 150000
+gfdt_start_index = 50001
+numerical_ensembles = 16384
+numerical_start_index = 80001
+numerical_method = "finite_difference"
+h_rel = 0.01
+h_abs = [0.05, 0.02, 0.05, 0.05]
+numerical_seed_base = 920000
+tmax = 2.0
+mean_center = true

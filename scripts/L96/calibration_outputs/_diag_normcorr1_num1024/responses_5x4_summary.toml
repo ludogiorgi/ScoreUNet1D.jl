@@ -1,0 +1,51 @@
+[l96]
+J = 10
+c = 10.0
+save_every = 20
+delta_t_obs = 0.1
+process_noise_sigma = 0.03
+b = 10.0
+dt = 0.005
+K = 36
+h = 1.0
+F = 10.0
+
+[score_correction.unet]
+pre_identity_rmse = 0.6610989196682804
+post_identity_rmse_direct = 1.7895153256532112e-8
+ridge = 1.0e-8
+post_identity_rmse_pinv = 1.7895153313263418e-8
+solver = "direct_solve"
+cond_regularized = 23.293710545925187
+post_identity_rmse = 1.7895153256532112e-8
+
+[score_correction.gaussian]
+pre_identity_rmse = 2.500280312764704e-5
+post_identity_rmse_direct = 1.0000249984720262e-8
+ridge = 1.0e-8
+post_identity_rmse_pinv = 1.000024899224882e-8
+solver = "pinv"
+cond_regularized = 1.0000000055666591
+post_identity_rmse = 1.000024899224882e-8
+
+[outputs]
+figure_raw = "/home/ludogio/Documents/JuliaProjects/ScoreUNet1D.jl/scripts/L96/calibration_outputs/_diag_normcorr1_num1024/responses_5x4_three_methods_raw.png"
+responses_csv = "/home/ludogio/Documents/JuliaProjects/ScoreUNet1D.jl/scripts/L96/calibration_outputs/_diag_normcorr1_num1024/responses_5x4_all_methods.csv"
+responses_hdf5 = "/home/ludogio/Documents/JuliaProjects/ScoreUNet1D.jl/scripts/L96/calibration_outputs/_diag_normcorr1_num1024/responses_5x4_all_methods.hdf5"
+figure_corrected = "/home/ludogio/Documents/JuliaProjects/ScoreUNet1D.jl/scripts/L96/calibration_outputs/_diag_normcorr1_num1024/responses_5x4_three_methods_corrected.png"
+
+[responses]
+numerical_ensembles_used = 1024
+gfdt_samples_used = 40000
+n_lags = 30
+tmax_effective = 3.0
+
+    [responses.finite_difference_h]
+    c = 0.01
+    b = 0.01
+    h = 0.001
+    F = 0.01
+
+[checkpoint]
+epoch = 20
+path = "/home/ludogio/Documents/JuliaProjects/ScoreUNet1D.jl/scripts/L96/runs_J10/run_026/model/score_model_epoch_0020.bson"

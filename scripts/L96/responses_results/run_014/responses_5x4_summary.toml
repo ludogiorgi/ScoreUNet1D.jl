@@ -1,0 +1,86 @@
+[l96]
+J = 10
+c = 10.0
+save_every = 20
+delta_t_obs = 0.1
+process_noise_sigma = 0.03
+b = 10.0
+dt = 0.005
+K = 36
+h = 1.0
+F = 10.0
+
+[methods]
+unet = true
+numerical = true
+gaussian = false
+
+[score_correction.unet]
+post_deviation_pinv = 2.6888637578035364
+ridge = 1.0e-8
+post_identity_rmse = 0.6691372173962266
+post_identity_rmse_pinv = 3.182403829899575e-8
+post_deviation = 0.0
+solver = "identity_fallback"
+cond_regularized = 106.34612189683968
+post_deviation_direct = 2.6888637578035355
+pre_identity_rmse = 0.6691372173962266
+post_identity_rmse_direct = 3.1824038408967465e-8
+max_deviation = 1.5
+
+[outputs]
+parameters_used_toml = "/home/ludogio/Documents/JuliaProjects/ScoreUNet1D.jl/scripts/L96/responses_results/run_014/parameters_used.toml"
+figure_raw = "/home/ludogio/Documents/JuliaProjects/ScoreUNet1D.jl/scripts/L96/responses_results/run_014/responses_5x4_selected_methods_raw.png"
+responses_csv = "/home/ludogio/Documents/JuliaProjects/ScoreUNet1D.jl/scripts/L96/responses_results/run_014/responses_5x4_selected_methods.csv"
+responses_hdf5 = "/home/ludogio/Documents/JuliaProjects/ScoreUNet1D.jl/scripts/L96/responses_results/run_014/responses_5x4_selected_methods.hdf5"
+figure_corrected = "/home/ludogio/Documents/JuliaProjects/ScoreUNet1D.jl/scripts/L96/responses_results/run_014/responses_5x4_selected_methods_corrected.png"
+
+[run]
+params_toml = "/tmp/params_repro_base.toml"
+id = 14
+generated_at_utc = "2026-02-20T19:33:33.230"
+output_dir = "/home/ludogio/Documents/JuliaProjects/ScoreUNet1D.jl/scripts/L96/responses_results/run_014"
+
+[responses]
+numerical_ensembles_used = 384
+gfdt_samples_used = 150000
+numerical_method = "finite_difference"
+n_lags = 60
+tmax_effective = 6.0
+
+[correction]
+ridge = 1.0e-8
+max_deviation = 1.5
+
+[finite_difference_h]
+c = 0.05
+b = 0.05
+h = 0.005
+F = 0.05
+
+[score_model]
+checkpoint_epoch = 20
+selected_device = "GPU:1"
+checkpoint_path = "/home/ludogio/Documents/JuliaProjects/ScoreUNet1D.jl/scripts/L96/runs_J10/run_026/model/score_model_epoch_0020.bson"
+forward_mode = "train"
+independent_of_method3_tuning = true
+requested_device = "auto"
+selection_reason = "auto->GPU:1 (used=68MB total=11264MB util=0.0%)"
+
+[rmse_vs_numerical.gfdt_unet_corrected]
+overall = 5.1679530725872524
+
+    [rmse_vs_numerical.gfdt_unet_corrected.per_param]
+    c = 2.9333254028936713
+    b = 2.0691784158043216
+    h = 9.623385877060638
+    F = 1.1556395923271785
+
+[rmse_vs_numerical.gfdt_unet_raw]
+overall = 5.167953072587252
+
+    [rmse_vs_numerical.gfdt_unet_raw.per_param]
+    c = 2.9333254028936713
+    b = 2.0691784158043216
+    h = 9.623385877060636
+    F = 1.1556395923271785

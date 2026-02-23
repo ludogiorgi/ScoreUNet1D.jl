@@ -1,0 +1,84 @@
+score_batch_size = 2048
+reference_mean_center = true
+reference_numerical_method = "tangent"
+output_dir = "/home/ludogio/Documents/JuliaProjects/ScoreUNet1D.jl/scripts/L96/responses_results/run_041"
+correction_ridge = 1.0e-8
+h_abs = [0.05, 0.02, 0.05, 0.05]
+auto_gpu_max_utilization = 20.0
+score_forward_mode = "train"
+reference_tmax = 2.0
+reference_numerical_start_index = 80001
+reference_h_abs = [0.01, 0.001, 0.01, 0.01]
+reference_numerical_seed_base = 1920000
+generated_at_utc = "2026-02-22T17:14:36.632"
+reference_cache_root = "scripts/L96/reference_responses_cache"
+run_id = 41
+checkpoint_path = ""
+output_root = "scripts/L96/responses_results"
+reference_h_rel = 0.005
+run_prefix = "run_"
+reference_force_regenerate = false
+reference_gfdt_nsamples = 200000
+auto_gpu_min_free_mb = 2048.0
+numerical_method = "finite_difference"
+mode = "responses"
+response_tmax = 6.0
+numerical_start_index = 80001
+checkpoint_epoch = 20
+gfdt_start_index = 50001
+numerical_ensembles = 16384
+gfdt_nsamples = 150000
+auto_gpu_max_mem_fraction = 0.25
+correction_max_deviation = 10.0
+dataset_attr_sync_mode = "override"
+reference_numerical_ensembles = 16384
+numerical_seed_base = 920000
+mean_center = true
+reference_gfdt_start_index = 50001
+compute_impulse = true
+run_dir = "scripts/L96/runs_J10/run_031"
+h_rel = 0.01
+params_toml = "/home/ludogio/Documents/JuliaProjects/ScoreUNet1D.jl/scripts/L96/parameters_responses.toml"
+score_device = "auto"
+
+[integration]
+J = 10
+c = 5.0
+save_every = 1
+process_noise_sigma = 0.05
+b = 10.0
+dt = 0.005
+K = 36
+h = 1.0
+F = 10.0
+
+[methods]
+unet = true
+numerical = false
+gaussian = true
+
+[dataset]
+key = "timeseries"
+path = "scripts/L96/observations/J10/l96_timeseries.hdf5"
+attr_sync_mode = "override"
+
+[dataset_attr_sync]
+dataset_path = "scripts/L96/observations/J10/l96_timeseries.hdf5"
+applied_override = true
+mode = "override"
+dataset_key = "timeseries"
+
+    [dataset_attr_sync.attrs]
+    J = 10
+    c = 5.0
+    save_every = 1
+    process_noise_sigma = 0.05
+    b = 10.0
+    dt = 0.005
+    K = 36
+    h = 1.0
+    F = 10.0
+
+    [dataset_attr_sync.mismatches.save_every]
+    config = 5
+    dataset = 1

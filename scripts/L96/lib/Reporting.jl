@@ -24,7 +24,9 @@ function write_run_summary(run_dir::AbstractString,
     model_dir = joinpath(run_dir, "model")
     if isdir(model_dir)
         for name in sort(readdir(model_dir))
-            endswith(lowercase(name), ".bson") || continue
+            lname = lowercase(name)
+            endswith(lname, ".bson") || continue
+            startswith(lname, "training_state") && continue
             push!(checkpoint_models, abspath(joinpath(model_dir, name)))
         end
     end
@@ -33,6 +35,8 @@ function write_run_summary(run_dir::AbstractString,
     for row in eval_rows
         epoch = Int(row["epoch"])
         fig_dir = String(row["fig_dir"])
+        figD_raw = haskey(row, "figure_D") ? String(row["figure_D"]) : ""
+        figD = isempty(strip(figD_raw)) ? "" : abspath(figD_raw)
         push!(eval_details, Dict{String,Any}(
             "epoch" => epoch,
             "langevin_profile" => get(row, "langevin_profile", "full"),
@@ -41,6 +45,7 @@ function write_run_summary(run_dir::AbstractString,
             "metrics_toml" => abspath(String(row["metrics_toml"])),
             "figure_B" => abspath(joinpath(fig_dir, "figB_stats_3x3.png")),
             "figure_C" => abspath(joinpath(fig_dir, "figC_dynamics_3x2.png")),
+            "figure_D" => figD,
             "langevin_seed" => Int(params["run.seed"]) + epoch,
         ))
     end
@@ -68,6 +73,8 @@ function write_run_summary(run_dir::AbstractString,
                 "sigma" => Float64(params["train.sigma"]),
                 "loss_x_weight" => Float64(params["train.loss.x_weight"]),
                 "loss_y_weight" => Float64(params["train.loss.y_weight"]),
+                "loss_mean_weight" => Float64(params["train.loss.mean_weight"]),
+                "loss_cov_weight" => Float64(params["train.loss.cov_weight"]),
             ),
             "model" => Dict{String,Any}(
                 "architecture" => String(params["train.model_arch"]),
@@ -113,6 +120,7 @@ function write_run_summary(run_dir::AbstractString,
         ),
         "training" => Dict{String,Any}(
             "model_path" => abspath(training_info["model_path"]),
+            "training_state_path" => haskey(training_info, "train_state_path") ? abspath(String(training_info["train_state_path"])) : "",
             "figure_A" => abspath(figA_path),
             "checkpoint_models" => checkpoint_models,
         ),

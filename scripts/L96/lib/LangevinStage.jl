@@ -9,7 +9,9 @@ function _append_log(log_path::AbstractString, msg::AbstractString)
 end
 
 function _run_logged(cmd::Cmd, log_path::AbstractString)
-    run(pipeline(pipeline(cmd; stderr=stdout), `tee -a $log_path`))
+    open(log_path, "a") do io
+        run(pipeline(cmd; stdout=io, stderr=io))
+    end
 end
 
 function read_keyval_metrics(path::AbstractString)

@@ -1,3 +1,8 @@
+# Standard command (from repository root):
+# julia --project=. scripts/L96/lib/generate_data.jl
+# Nohup command:
+# nohup julia --project=. scripts/L96/lib/generate_data.jl > scripts/L96/nohup_generate_data.log 2>&1 &
+
 using HDF5
 using Random
 using TOML
@@ -22,6 +27,7 @@ const SAVE_EVERY = parse(Int, get(ENV, "L96_SAVE_EVERY", "10"))
 const NSAMPLES = parse(Int, get(ENV, "L96_NSAMPLES", "12000"))
 const RNG_SEED = parse(Int, get(ENV, "L96_RNG_SEED", "1234"))
 const PROCESS_NOISE_SIGMA = parse(Float64, get(ENV, "L96_PROCESS_NOISE_SIGMA", "0.03"))
+const STOCHASTIC_X_NOISE = lowercase(get(ENV, "L96_STOCHASTIC_X_NOISE", "false")) == "true"
 
 const RUN_DIR = let
     default_dir = L96RunLayout.pick_generation_run_dir(@__DIR__, J)
@@ -47,9 +53,9 @@ Two-scale Lorenz-96 drift following Schneider et al. (2017) GRL Eqs. (11-13):
 - slow variables keep periodicity `X_{k+K} = X_k`.
 """
 function l96_two_scale_drift!(dx::AbstractVector{Float64},
-                              dy::AbstractMatrix{Float64},
-                              x::AbstractVector{Float64},
-                              y::AbstractMatrix{Float64})
+    dy::AbstractMatrix{Float64},
+    x::AbstractVector{Float64},
+    y::AbstractMatrix{Float64})
     @inbounds for k in 1:K
         km2 = mod1idx(k - 2, K)
         km1 = mod1idx(k - 1, K)
@@ -83,9 +89,9 @@ function l96_two_scale_drift!(dx::AbstractVector{Float64},
 end
 
 function rk4_step!(x::Vector{Float64},
-                   y::Matrix{Float64},
-                   dt::Float64,
-                   ws::NamedTuple)
+    y::Matrix{Float64},
+    dt::Float64,
+    ws::NamedTuple)
     l96_two_scale_drift!(ws.dx1, ws.dy1, x, y)
 
     @. ws.xtmp = x + 0.5 * dt * ws.dx1
@@ -112,15 +118,18 @@ Adds additive process noise after each deterministic RK4 step. Set
 `PROCESS_NOISE_SIGMA=0` for deterministic Schneider dynamics.
 """
 function add_process_noise!(x::Vector{Float64},
-                            y::Matrix{Float64},
-                            rng::AbstractRNG,
-                            sigma::Float64,
-                            dt::Float64)
+    y::Matrix{Float64},
+    rng::AbstractRNG,
+    sigma::Float64,
+    dt::Float64;
+    stochastic_x_noise::Bool=false)
     sigma_step = sigma * sqrt(dt)
     sigma_step == 0.0 && return nothing
     @inbounds begin
-        for k in eachindex(x)
-            x[k] += sigma_step * randn(rng)
+        if stochastic_x_noise
+            for k in eachindex(x)
+                x[k] += sigma_step * randn(rng)
+            end
         end
         for idx in eachindex(y)
             y[idx] += sigma_step * randn(rng)
@@ -138,12 +147,12 @@ function make_workspace()
 end
 
 function write_snapshot!(dest::AbstractMatrix{Float32},
-                         x::AbstractVector{Float64},
-                         y::AbstractMatrix{Float64})
+    x::AbstractVector{Float64},
+    y::AbstractMatrix{Float64})
     @inbounds for k in 1:K
         dest[1, k] = Float32(x[k])
         for j in 1:J
-            dest[j + 1, k] = Float32(y[j, k])
+            dest[j+1, k] = Float32(y[j, k])
         end
     end
     return nothing
@@ -159,7 +168,7 @@ function generate_l96_dataset()
     @info "Spin-up started (Schneider Eq. 11-13 drift with optional additive process noise)" steps = SPINUP_STEPS dt = DT process_noise_sigma = PROCESS_NOISE_SIGMA deterministic = (PROCESS_NOISE_SIGMA == 0.0)
     for _ in 1:SPINUP_STEPS
         rk4_step!(x, y, DT, ws)
-        add_process_noise!(x, y, rng, PROCESS_NOISE_SIGMA, DT)
+        add_process_noise!(x, y, rng, PROCESS_NOISE_SIGMA, DT; stochastic_x_noise=STOCHASTIC_X_NOISE)
     end
 
     raw = Array{Float32}(undef, NSAMPLES, J + 1, K)
@@ -169,7 +178,7 @@ function generate_l96_dataset()
     for n in 1:NSAMPLES
         for _ in 1:SAVE_EVERY
             rk4_step!(x, y, DT, ws)
-            add_process_noise!(x, y, rng, PROCESS_NOISE_SIGMA, DT)
+            add_process_noise!(x, y, rng, PROCESS_NOISE_SIGMA, DT; stochastic_x_noise=STOCHASTIC_X_NOISE)
         end
         write_snapshot!(snap, x, y)
         @views raw[n, :, :] .= snap
@@ -194,6 +203,7 @@ function save_dataset(raw::Array{Float32,3})
         attrs["spinup_steps"] = Int(SPINUP_STEPS)
         attrs["save_every"] = Int(SAVE_EVERY)
         attrs["process_noise_sigma"] = Float64(PROCESS_NOISE_SIGMA)
+        attrs["stochastic_x_noise"] = STOCHASTIC_X_NOISE
         attrs["dynamics_reference"] = "Schneider et al. (2017) Eqs. (11-13)"
         attrs["coupling_scale"] = "h*c/J"
         attrs["fast_topology"] = "twisted_ring_KJ"
@@ -223,6 +233,7 @@ function save_dataset_params_toml(raw::Array{Float32,3}, out_path::AbstractStrin
             "nsamples" => NSAMPLES,
             "rng_seed" => RNG_SEED,
             "process_noise_sigma" => PROCESS_NOISE_SIGMA,
+            "stochastic_x_noise" => STOCHASTIC_X_NOISE,
             "dynamics_reference" => "Schneider et al. (2017) Eqs. (11-13)",
             "coupling_scale" => "h*c/J",
             "fast_topology" => "Y_{j+J,k}=Y_{j,k+1}",
@@ -258,6 +269,7 @@ function save_generation_config(raw::Array{Float32,3}, out_path::AbstractString)
             "nsamples" => NSAMPLES,
             "rng_seed" => RNG_SEED,
             "process_noise_sigma" => PROCESS_NOISE_SIGMA,
+            "stochastic_x_noise" => STOCHASTIC_X_NOISE,
             "dynamics_reference" => "Schneider et al. (2017) Eqs. (11-13)",
             "coupling_scale" => "h*c/J",
             "fast_topology" => "Y_{j+J,k}=Y_{j,k+1}",
@@ -291,6 +303,7 @@ if !PIPELINE_MODE
             "nsamples" => NSAMPLES,
             "rng_seed" => RNG_SEED,
             "process_noise_sigma" => PROCESS_NOISE_SIGMA,
+            "stochastic_x_noise" => STOCHASTIC_X_NOISE,
             "dynamics_reference" => "Schneider et al. (2017) Eqs. (11-13)",
             "coupling_scale" => "h*c/J",
             "fast_topology" => "Y_{j+J,k}=Y_{j,k+1}",

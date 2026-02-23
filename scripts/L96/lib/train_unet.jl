@@ -1,3 +1,8 @@
+# Standard command (from repository root):
+# julia --project=. scripts/L96/lib/train_unet.jl
+# Nohup command:
+# nohup julia --project=. scripts/L96/lib/train_unet.jl > scripts/L96/nohup_train_unet.log 2>&1 &
+
 if get(ENV, "GKSwstype", "") == ""
     ENV["GKSwstype"] = "100"
 end
@@ -26,6 +31,8 @@ const MODEL_PATH = get(ENV, "L96_MODEL_PATH", TRAIN_PATHS.model_path)
 const TRAIN_DIAG_DIR = get(ENV, "L96_TRAIN_DIAG_DIR", TRAIN_PATHS.diagnostics_dir)
 const CHECKPOINT_DIR = get(ENV, "L96_CHECKPOINT_DIR", TRAIN_PATHS.checkpoints_dir)
 const TRAIN_CONFIG_PATH = get(ENV, "L96_TRAIN_CONFIG_PATH", PIPELINE_MODE ? "" : L96RunLayout.default_config_path(RUN_DIR, "train_unet"))
+const TRAIN_STATE_PATH = get(ENV, "L96_TRAIN_STATE_PATH", joinpath(dirname(MODEL_PATH), "training_state_latest.bson"))
+const RESUME_STATE_PATH = strip(get(ENV, "L96_RESUME_STATE_PATH", ""))
 
 const DEVICE_NAME = get(ENV, "L96_TRAIN_DEVICE", "GPU:0")
 const TRAIN_SEED = parse(Int, get(ENV, "L96_TRAIN_SEED", "42"))
@@ -49,6 +56,8 @@ const EMA_DECAY = parse(Float32, get(ENV, "L96_EMA_DECAY", "0.999"))
 const EMA_USE_FOR_EVAL = lowercase(get(ENV, "L96_EMA_USE_FOR_EVAL", "true")) == "true"
 const LOSS_X_WEIGHT = parse(Float32, get(ENV, "L96_LOSS_X_WEIGHT", "1.0"))
 const LOSS_Y_WEIGHT = parse(Float32, get(ENV, "L96_LOSS_Y_WEIGHT", "1.0"))
+const LOSS_MEAN_WEIGHT = parse(Float32, get(ENV, "L96_LOSS_MEAN_WEIGHT", "0.0"))
+const LOSS_COV_WEIGHT = parse(Float32, get(ENV, "L96_LOSS_COV_WEIGHT", "0.0"))
 
 const EVAL_NUM_SAMPLES = parse(Int, get(ENV, "L96_EVAL_NUM_SAMPLES", "2048"))
 const EVAL_BATCH_SIZE = parse(Int, get(ENV, "L96_EVAL_BATCH_SIZE", "256"))
@@ -308,6 +317,75 @@ function write_training_metrics(path::AbstractString,
     return path
 end
 
+function tree_to_cpu(tree)
+    return Functors.fmap(tree) do x
+        x isa AbstractArray ? Array(x) : x
+    end
+end
+
+function tree_to_device(tree, device::ExecutionDevice)
+    if device isa ScoreUNet1D.GPUDevice
+        return Functors.fmap(tree) do x
+            x isa AbstractArray ? move_array(Array(x), device) : x
+        end
+    end
+    return tree_to_cpu(tree)
+end
+
+function maybe_resume_payload(path::AbstractString)
+    p = String(strip(path))
+    isempty(p) && return nothing
+    isfile(p) || error("Requested resume state file does not exist: $p")
+    payload = BSON.load(p)
+    model_ok = haskey(payload, :model_raw) || haskey(payload, :model_raw_cpu) || haskey(payload, :model)
+    opt_ok = haskey(payload, :opt_state) || haskey(payload, :opt_state_cpu)
+    model_ok || error("Resume state missing model payload (:model_raw or :model_raw_cpu or :model) in $p")
+    opt_ok || error("Resume state missing optimizer payload (:opt_state or :opt_state_cpu) in $p")
+    haskey(payload, :epoch) || error("Resume state missing :epoch in $p")
+    return payload
+end
+
+function resume_model(payload::AbstractDict)
+    haskey(payload, :model_raw) && return payload[:model_raw]
+    haskey(payload, :model_raw_cpu) && return payload[:model_raw_cpu]
+    return payload[:model]
+end
+
+function resume_opt_state(payload::AbstractDict)
+    haskey(payload, :opt_state) && return payload[:opt_state]
+    return payload[:opt_state_cpu]
+end
+
+function save_training_state(path::AbstractString;
+                             epoch::Int,
+                             global_step::Int,
+                             model_raw_cpu,
+                             ema_model_cpu,
+                             opt_state_cpu,
+                             rng::MersenneTwister,
+                             thread_rngs::Vector{MersenneTwister},
+                             cfg,
+                             trainer_cfg,
+                             stats::DataStats,
+                             epoch_times::Vector{Float64},
+                             eval_epochs::Vector{Int},
+                             eval_losses::Vector{Float64},
+                             kl_epochs::Vector{Int},
+                             kl_mode_vals::Vector{Float64},
+                             kl_global_vals::Vector{Float64},
+                             history_epoch_losses::Vector{Float32},
+                             history_batch_losses::Vector{Float32},
+                             train_config_path::AbstractString)
+    mkpath(dirname(path))
+    normalization_mode = NORMALIZATION_MODE
+    run_dir = RUN_DIR
+    model_raw = model_raw_cpu
+    ema_model = ema_model_cpu
+    opt_state = opt_state_cpu
+    BSON.@save path epoch global_step model_raw ema_model opt_state rng thread_rngs cfg trainer_cfg stats epoch_times eval_epochs eval_losses kl_epochs kl_mode_vals kl_global_vals history_epoch_losses history_batch_losses normalization_mode run_dir train_config_path
+    return path
+end
+
 function save_training_config(run_dir::AbstractString,
                               tensor_shape::NTuple{3,Int},
                               multipliers::Vector{Int},
@@ -351,6 +429,8 @@ function save_training_config(run_dir::AbstractString,
             "min_lr_factor" => MIN_LR_FACTOR,
             "loss_x_weight" => Float64(LOSS_X_WEIGHT),
             "loss_y_weight" => Float64(LOSS_Y_WEIGHT),
+            "loss_mean_weight" => Float64(LOSS_MEAN_WEIGHT),
+            "loss_cov_weight" => Float64(LOSS_COV_WEIGHT),
             "ema_enabled" => EMA_ENABLED,
             "ema_decay_per_step" => Float64(EMA_DECAY),
             "ema_decay_effective_per_epoch" => ema_decay_epoch,
@@ -382,6 +462,7 @@ function main()
     isfile(DATA_PATH) || error("Dataset not found at $DATA_PATH. Run generate_data.jl first.")
     ensure_dir(dirname(MODEL_PATH))
     ensure_dir(TRAIN_DIAG_DIR)
+    ensure_dir(dirname(TRAIN_STATE_PATH))
     if !PIPELINE_MODE
         L96RunLayout.ensure_runs_readme!(L96RunLayout.default_runs_root(@__DIR__))
     end
@@ -402,6 +483,20 @@ function main()
     # EMA decay is commonly chosen as a per-step factor; convert to an equivalent
     # per-epoch factor because this stage updates EMA once per epoch.
     ema_decay_epoch = Float32(EMA_DECAY ^ steps_per_epoch)
+    resume_payload = maybe_resume_payload(RESUME_STATE_PATH)
+
+    resume_epoch = 0
+    resume_global_step = 0
+    resume_rng = MersenneTwister(TRAIN_SEED)
+    resume_thread_rngs = ScoreUNet1D.seed_thread_rngs(TRAIN_SEED)
+    history_epoch_losses_seed = Float32[]
+    history_batch_losses_seed = Float32[]
+    epoch_times = Float64[]
+    eval_epochs = Int[]
+    eval_losses = Float64[]
+    kl_epochs = Int[]
+    kl_mode_vals = Float64[]
+    kl_global_vals = Float64[]
 
     Random.seed!(TRAIN_SEED)
     cfg = nothing
@@ -436,6 +531,28 @@ function main()
         model = build_unet(vanilla_cfg)
     end
 
+    if resume_payload !== nothing
+        resume_epoch = Int(resume_payload[:epoch])
+        resume_global_step = Int(get(resume_payload, :global_step, 0))
+        resume_rng = haskey(resume_payload, :rng) ? copy(resume_payload[:rng]) : MersenneTwister(TRAIN_SEED + resume_epoch)
+        if haskey(resume_payload, :thread_rngs)
+            resume_thread_rngs = [copy(r) for r in resume_payload[:thread_rngs]]
+        else
+            resume_thread_rngs = ScoreUNet1D.seed_thread_rngs(TRAIN_SEED + resume_epoch)
+        end
+        history_epoch_losses_seed = haskey(resume_payload, :history_epoch_losses) ? Float32.(resume_payload[:history_epoch_losses]) : Float32[]
+        history_batch_losses_seed = haskey(resume_payload, :history_batch_losses) ? Float32.(resume_payload[:history_batch_losses]) : Float32[]
+        epoch_times = haskey(resume_payload, :epoch_times) ? Float64.(resume_payload[:epoch_times]) : Float64[]
+        eval_epochs = haskey(resume_payload, :eval_epochs) ? Int.(resume_payload[:eval_epochs]) : Int[]
+        eval_losses = haskey(resume_payload, :eval_losses) ? Float64.(resume_payload[:eval_losses]) : Float64[]
+        kl_epochs = haskey(resume_payload, :kl_epochs) ? Int.(resume_payload[:kl_epochs]) : Int[]
+        kl_mode_vals = haskey(resume_payload, :kl_mode_vals) ? Float64.(resume_payload[:kl_mode_vals]) : Float64[]
+        kl_global_vals = haskey(resume_payload, :kl_global_vals) ? Float64.(resume_payload[:kl_global_vals]) : Float64[]
+        model = resume_model(resume_payload)
+        cfg = get(resume_payload, :cfg, cfg)
+        @info "Resuming L96 training state" resume_state_path = RESUME_STATE_PATH resume_epoch = resume_epoch target_epoch = EPOCHS
+    end
+
     trainer_cfg = ScoreTrainerConfig(
         batch_size=BATCH_SIZE,
         epochs=EPOCHS,
@@ -448,30 +565,63 @@ function main()
         min_lr_factor=MIN_LR_FACTOR,
         x_loss_weight=LOSS_X_WEIGHT,
         y_loss_weight=LOSS_Y_WEIGHT,
+        mean_match_weight=LOSS_MEAN_WEIGHT,
+        cov_match_weight=LOSS_COV_WEIGHT,
     )
 
-    device = select_device(DEVICE_NAME)
-    device isa ScoreUNet1D.GPUDevice || error("L96 training must run on GPU. Set L96_TRAIN_DEVICE to a GPU target (e.g., GPU:0).")
+    device = try
+        select_device(DEVICE_NAME)
+    catch err
+        @warn "Requested training device unavailable; falling back to CPU" requested = DEVICE_NAME error = sprint(showerror, err)
+        ScoreUNet1D.CPUDevice()
+    end
+    if !(device isa ScoreUNet1D.GPUDevice)
+        @warn "Running L96 training on CPU; this is slower than GPU but fully supported" device = DEVICE_NAME
+    end
     activate_device!(device)
     model = move_model(model, device)
 
-    epoch_times = Float64[]
-    eval_epochs = Int[]
-    eval_losses = Float64[]
-    kl_epochs = Int[]
-    kl_mode_vals = Float64[]
-    kl_global_vals = Float64[]
-    epoch_progress = Progress(EPOCHS; desc="Training epochs")
-    ema_model_cpu = EMA_ENABLED ? move_model(model, ScoreUNet1D.CPUDevice()) : nothing
+    epoch_progress = Progress(max(EPOCHS - resume_epoch, 0); desc="Training epochs")
+    ema_model_cpu = if EMA_ENABLED
+        if resume_payload !== nothing && haskey(resume_payload, :ema_model) && resume_payload[:ema_model] !== nothing
+            resume_payload[:ema_model]
+        else
+            move_model(model, ScoreUNet1D.CPUDevice())
+        end
+    else
+        nothing
+    end
     if ema_model_cpu !== nothing
         Flux.testmode!(ema_model_cpu)
     end
+
+    initial_state = if resume_payload === nothing
+        nothing
+    else
+        opt_state_resume = tree_to_device(resume_opt_state(resume_payload), device)
+        TrainingState(
+            epoch=resume_epoch,
+            global_step=resume_global_step,
+            opt_state=opt_state_resume,
+            epoch_losses=copy(history_epoch_losses_seed),
+            batch_losses=copy(history_batch_losses_seed),
+            rng=copy(resume_rng),
+            thread_rngs=[copy(r) for r in resume_thread_rngs],
+        )
+    end
+
+    latest_model_cpu = nothing
+    latest_opt_state_cpu = resume_payload === nothing ? nothing : resume_opt_state(resume_payload)
+    latest_global_step = resume_global_step
+    latest_rng = copy(resume_rng)
+    latest_thread_rngs = [copy(r) for r in resume_thread_rngs]
 
     epoch_callback = function(epoch::Int, model_epoch, epoch_time::Real)
         push!(epoch_times, Float64(epoch_time))
         Flux.testmode!(model_epoch)
         model_cpu_epoch = move_model(model_epoch, ScoreUNet1D.CPUDevice())
         Flux.testmode!(model_cpu_epoch)
+        latest_model_cpu = model_cpu_epoch
 
         if ema_model_cpu !== nothing
             Functors.fmap(ema_model_cpu, model_cpu_epoch) do a, b
@@ -503,14 +653,14 @@ function main()
 
         if SAVE_CHECKPOINT_EVERY > 0 && epoch % SAVE_CHECKPOINT_EVERY == 0
             ensure_dir(CHECKPOINT_DIR)
-            ckpt_path = joinpath(CHECKPOINT_DIR, @sprintf("epoch_%03d.bson", epoch))
+            ckpt_path = joinpath(CHECKPOINT_DIR, @sprintf("epoch_%04d.bson", epoch))
             if EMA_ENABLED && EMA_USE_FOR_EVAL && ema_model_cpu !== nothing
-                raw_ckpt = joinpath(CHECKPOINT_DIR, @sprintf("epoch_%03d_raw.bson", epoch))
+                raw_ckpt = joinpath(CHECKPOINT_DIR, @sprintf("epoch_%04d_raw.bson", epoch))
                 BSON.@save raw_ckpt model = model_cpu_epoch cfg trainer_cfg stats epoch
                 BSON.@save ckpt_path model = ema_model_cpu cfg trainer_cfg stats epoch
                 @info "Saved epoch checkpoint" path = ckpt_path raw = raw_ckpt
             elseif EMA_ENABLED && ema_model_cpu !== nothing
-                ema_ckpt = joinpath(CHECKPOINT_DIR, @sprintf("epoch_%03d_ema.bson", epoch))
+                ema_ckpt = joinpath(CHECKPOINT_DIR, @sprintf("epoch_%04d_ema.bson", epoch))
                 BSON.@save ckpt_path model = model_cpu_epoch cfg trainer_cfg stats epoch
                 BSON.@save ema_ckpt model = ema_model_cpu cfg trainer_cfg stats epoch
                 @info "Saved epoch checkpoint" path = ckpt_path ema = ema_ckpt
@@ -526,8 +676,55 @@ function main()
         return nothing
     end
 
-    @info "Starting L96 training" device = DEVICE_NAME epochs = EPOCHS batch_size = BATCH_SIZE sigma = SIGMA multipliers = multipliers architecture = String(model_arch) normalization = NORMALIZATION_MODE ema_decay_per_step = Float64(EMA_DECAY) ema_decay_effective_per_epoch = Float64(ema_decay_epoch) run_dir = RUN_DIR config = (isempty(train_config_path) ? "disabled_in_pipeline_mode" : train_config_path)
-    history = train!(model, dataset, trainer_cfg; device=device, epoch_callback=epoch_callback)
+    state_callback = function(state::TrainingState)
+        latest_global_step = Int(state.global_step)
+        latest_rng = copy(state.rng)
+        latest_thread_rngs = [copy(r) for r in state.thread_rngs]
+        latest_opt_state_cpu = tree_to_cpu(state.opt_state)
+
+        persist_now = (state.epoch == EPOCHS) || (SAVE_CHECKPOINT_EVERY > 0 && state.epoch % SAVE_CHECKPOINT_EVERY == 0)
+        persist_now || return nothing
+
+        model_raw_cpu = latest_model_cpu === nothing ? move_model(model, ScoreUNet1D.CPUDevice()) : latest_model_cpu
+        save_training_state(
+            TRAIN_STATE_PATH;
+            epoch=Int(state.epoch),
+            global_step=Int(state.global_step),
+            model_raw_cpu=model_raw_cpu,
+            ema_model_cpu=ema_model_cpu,
+            opt_state_cpu=latest_opt_state_cpu,
+            rng=latest_rng,
+            thread_rngs=latest_thread_rngs,
+            cfg=cfg,
+            trainer_cfg=trainer_cfg,
+            stats=stats,
+            epoch_times=epoch_times,
+            eval_epochs=eval_epochs,
+            eval_losses=eval_losses,
+            kl_epochs=kl_epochs,
+            kl_mode_vals=kl_mode_vals,
+            kl_global_vals=kl_global_vals,
+            history_epoch_losses=state.epoch_losses,
+            history_batch_losses=state.batch_losses,
+            train_config_path=train_config_path,
+        )
+        if SAVE_CHECKPOINT_EVERY > 0 && state.epoch % SAVE_CHECKPOINT_EVERY == 0
+            snap = joinpath(dirname(TRAIN_STATE_PATH), @sprintf("training_state_epoch_%04d.bson", state.epoch))
+            cp(TRAIN_STATE_PATH, snap; force=true)
+        end
+        return nothing
+    end
+
+    @info "Starting L96 training" device = DEVICE_NAME epochs = EPOCHS resume_epoch = resume_epoch batch_size = BATCH_SIZE sigma = SIGMA multipliers = multipliers architecture = String(model_arch) normalization = NORMALIZATION_MODE ema_decay_per_step = Float64(EMA_DECAY) ema_decay_effective_per_epoch = Float64(ema_decay_epoch) run_dir = RUN_DIR config = (isempty(train_config_path) ? "disabled_in_pipeline_mode" : train_config_path)
+    history = train!(
+        model,
+        dataset,
+        trainer_cfg;
+        device=device,
+        epoch_callback=epoch_callback,
+        state_callback=state_callback,
+        initial_state=initial_state,
+    )
     epoch_progress !== nothing && ProgressMeter.finish!(epoch_progress)
 
     model_cpu_raw = is_gpu(device) ? move_model(model, ScoreUNet1D.CPUDevice()) : model
@@ -538,6 +735,36 @@ function main()
         model_cpu_raw
     end
     Flux.testmode!(model_cpu)
+
+    if latest_opt_state_cpu === nothing
+        latest_opt_state_cpu = if initial_state === nothing
+            tree_to_cpu(Flux.setup(Flux.Optimisers.Adam(trainer_cfg.lr), model))
+        else
+            tree_to_cpu(initial_state.opt_state)
+        end
+    end
+    save_training_state(
+        TRAIN_STATE_PATH;
+        epoch=length(history.epoch_losses),
+        global_step=latest_global_step,
+        model_raw_cpu=model_cpu_raw,
+        ema_model_cpu=ema_model_cpu,
+        opt_state_cpu=latest_opt_state_cpu,
+        rng=latest_rng,
+        thread_rngs=latest_thread_rngs,
+        cfg=cfg,
+        trainer_cfg=trainer_cfg,
+        stats=stats,
+        epoch_times=epoch_times,
+        eval_epochs=eval_epochs,
+        eval_losses=eval_losses,
+        kl_epochs=kl_epochs,
+        kl_mode_vals=kl_mode_vals,
+        kl_global_vals=kl_global_vals,
+        history_epoch_losses=history.epoch_losses,
+        history_batch_losses=history.batch_losses,
+        train_config_path=train_config_path,
+    )
 
     training_metrics_path = joinpath(TRAIN_DIAG_DIR, "training_metrics.csv")
     epoch_losses_f64 = Float64.(history.epoch_losses)
@@ -558,9 +785,11 @@ function main()
     end
     BSON.@save MODEL_PATH model = model_cpu cfg trainer_cfg stats history epoch_times eval_epochs eval_losses kl_epochs kl_mode_vals kl_global_vals training_metrics_path normalization_mode run_dir train_config_path
 
+    final_train_loss = isempty(history.epoch_losses) ? NaN : Float64(history.epoch_losses[end])
+    best_train_loss = isempty(history.epoch_losses) ? NaN : minimum(Float64.(history.epoch_losses))
     train_metrics_for_manifest = Dict{String,Any}(
-        "final_train_loss" => Float64(history.epoch_losses[end]),
-        "best_train_loss" => minimum(Float64.(history.epoch_losses)),
+        "final_train_loss" => final_train_loss,
+        "best_train_loss" => best_train_loss,
     )
     if !isempty(eval_losses)
         train_metrics_for_manifest["best_eval_denoise_loss"] = minimum(eval_losses)
@@ -574,6 +803,7 @@ function main()
     train_artifacts = Dict{String,Any}(
         "train_config" => abspath(train_config_path),
         "training_metrics_csv" => abspath(training_metrics_path),
+        "training_state_path" => abspath(TRAIN_STATE_PATH),
     )
 
     if !PIPELINE_MODE
@@ -598,6 +828,8 @@ function main()
                 "min_lr_factor" => MIN_LR_FACTOR,
                 "x_loss_weight" => Float64(LOSS_X_WEIGHT),
                 "y_loss_weight" => Float64(LOSS_Y_WEIGHT),
+                "mean_match_weight" => Float64(LOSS_MEAN_WEIGHT),
+                "cov_match_weight" => Float64(LOSS_COV_WEIGHT),
                 "ema_enabled" => EMA_ENABLED,
                 "ema_decay_per_step" => Float64(EMA_DECAY),
                 "ema_decay_effective_per_epoch" => Float64(ema_decay_epoch),

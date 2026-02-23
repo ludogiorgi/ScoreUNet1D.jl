@@ -1,0 +1,71 @@
+score_batch_size = 2048
+numerical_method = "finite_difference"
+auto_gpu_max_mem_fraction = 0.25
+auto_gpu_min_free_mb = 2048.0
+generated_at_utc = "2026-02-21T00:24:35.798"
+output_dir = "/home/ludogio/Documents/JuliaProjects/ScoreUNet1D.jl/scripts/L96/responses_results/run_027"
+correction_max_deviation = 10.0
+dataset_attr_sync_mode = "warn"
+run_id = 27
+checkpoint_path = ""
+output_root = "scripts/L96/responses_results"
+correction_ridge = 1.0e-8
+h_abs = [0.05, 0.02, 0.05, 0.05]
+response_tmax = 6.0
+numerical_start_index = 80001
+numerical_seed_base = 920000
+mean_center = true
+compute_impulse = true
+checkpoint_epoch = 10
+gfdt_start_index = 50001
+auto_gpu_max_utilization = 20.0
+run_dir = "scripts/L96/runs_J10/run_026"
+score_forward_mode = "train"
+h_rel = 0.01
+params_toml = "/home/ludogio/Documents/JuliaProjects/ScoreUNet1D.jl/scripts/L96/parameters_responses.toml"
+run_prefix = "run_"
+numerical_ensembles = 16384
+gfdt_nsamples = 150000
+score_device = "auto"
+
+[dataset_attr_sync]
+dataset_path = "/home/ludogio/Documents/JuliaProjects/ScoreUNet1D.jl/scripts/L96/observations/J10/l96_timeseries_save20_200k.hdf5"
+applied_override = false
+mode = "warn"
+dataset_key = "timeseries"
+
+    [dataset_attr_sync.attrs]
+    J = 10
+    c = 10.0
+    save_every = 20
+    process_noise_sigma = 0.03
+    b = 10.0
+    dt = 0.005
+    K = 36
+    h = 1.0
+    F = 10.0
+
+    [dataset_attr_sync.mismatches.save_every]
+    config = 5
+    dataset = 20
+
+[integration]
+J = 10
+c = 10.0
+save_every = 5
+process_noise_sigma = 0.03
+b = 10.0
+dt = 0.005
+K = 36
+h = 1.0
+F = 10.0
+
+[methods]
+unet = true
+numerical = true
+gaussian = false
+
+[dataset]
+key = "timeseries"
+path = "/home/ludogio/Documents/JuliaProjects/ScoreUNet1D.jl/scripts/L96/observations/J10/l96_timeseries_save20_200k.hdf5"
+attr_sync_mode = "warn"

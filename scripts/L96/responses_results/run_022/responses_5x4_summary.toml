@@ -1,0 +1,107 @@
+
+[score_correction.unet]
+post_deviation_pinv = 2.638531225196217
+ridge = 1.0e-8
+post_identity_rmse = 0.6698380908506539
+post_identity_rmse_pinv = 3.13629350820543e-8
+post_deviation = 0.0
+solver = "identity_fallback"
+cond_regularized = 109.92506624999604
+post_deviation_direct = 2.638531225196215
+pre_identity_rmse = 0.6698380908506539
+post_identity_rmse_direct = 3.13629351561096e-8
+max_deviation = 1.5
+[correction]
+ridge = 1.0e-8
+max_deviation = 1.5
+
+[dataset_attr_sync]
+dataset_path = "/home/ludogio/Documents/JuliaProjects/ScoreUNet1D.jl/scripts/L96/observations/J10/l96_timeseries_save20_200k.hdf5"
+applied_override = false
+mode = "warn"
+dataset_key = "timeseries"
+
+    [dataset_attr_sync.attrs]
+    J = 10
+    c = 10.0
+    save_every = 20
+    process_noise_sigma = 0.03
+    b = 10.0
+    dt = 0.005
+    K = 36
+    h = 1.0
+    F = 10.0
+
+    [dataset_attr_sync.mismatches.save_every]
+    config = 5
+    dataset = 20
+
+[outputs]
+parameters_used_toml = "/home/ludogio/Documents/JuliaProjects/ScoreUNet1D.jl/scripts/L96/responses_results/run_022/parameters_used.toml"
+figure_raw = "/home/ludogio/Documents/JuliaProjects/ScoreUNet1D.jl/scripts/L96/responses_results/run_022/responses_5x4_selected_methods_raw.png"
+responses_csv = "/home/ludogio/Documents/JuliaProjects/ScoreUNet1D.jl/scripts/L96/responses_results/run_022/responses_5x4_selected_methods.csv"
+responses_hdf5 = "/home/ludogio/Documents/JuliaProjects/ScoreUNet1D.jl/scripts/L96/responses_results/run_022/responses_5x4_selected_methods.hdf5"
+figure_corrected = "/home/ludogio/Documents/JuliaProjects/ScoreUNet1D.jl/scripts/L96/responses_results/run_022/responses_5x4_selected_methods_corrected.png"
+
+[rmse_vs_numerical.gfdt_unet_corrected]
+overall = 16.42901658306041
+
+    [rmse_vs_numerical.gfdt_unet_corrected.per_param]
+    c = 9.32263017031776
+    b = 6.123929776838017
+    h = 30.90236629417277
+    F = 0.5292936448783584
+
+[rmse_vs_numerical.gfdt_unet_raw]
+overall = 16.42901658306041
+
+    [rmse_vs_numerical.gfdt_unet_raw.per_param]
+    c = 9.322630170317762
+    b = 6.123929776838017
+    h = 30.90236629417277
+    F = 0.5292936448783583
+
+[l96]
+J = 10
+c = 10.0
+save_every = 5
+delta_t_obs = 0.025
+process_noise_sigma = 0.03
+b = 10.0
+dt = 0.005
+K = 36
+h = 1.0
+F = 10.0
+
+[methods]
+unet = true
+numerical = true
+gaussian = false
+
+[responses]
+numerical_ensembles_used = 16384
+gfdt_samples_used = 150000
+numerical_method = "finite_difference"
+n_lags = 240
+tmax_effective = 6.0
+
+[run]
+params_toml = "/home/ludogio/Documents/JuliaProjects/ScoreUNet1D.jl/scripts/L96/parameters_responses.toml"
+id = 22
+generated_at_utc = "2026-02-20T22:16:00.789"
+output_dir = "/home/ludogio/Documents/JuliaProjects/ScoreUNet1D.jl/scripts/L96/responses_results/run_022"
+
+[finite_difference_h]
+c = 0.1
+b = 0.1
+h = 0.02
+F = 0.1
+
+[score_model]
+checkpoint_epoch = 20
+selected_device = "GPU:1"
+checkpoint_path = "/home/ludogio/Documents/JuliaProjects/ScoreUNet1D.jl/scripts/L96/runs_J10/run_026/model/score_model_epoch_0020.bson"
+forward_mode = "train"
+independent_of_method3_tuning = true
+requested_device = "auto"
+selection_reason = "auto->GPU:1 (used=68MB total=11264MB util=0.0%)"

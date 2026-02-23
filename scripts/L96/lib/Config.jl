@@ -38,12 +38,28 @@ function _as_string(x, label::String)
     return s
 end
 
+function _as_string_allow_empty(x, label::String)
+    x isa AbstractString || error("$label must be string, got $(typeof(x))")
+    return strip(String(x))
+end
+
 function _as_int_vec(x, label::String)
     x isa Vector || error("$label must be array")
     vals = Int[]
     for v in x
         v isa Integer || error("$label entries must be integer")
         push!(vals, Int(v))
+    end
+    isempty(vals) && error("$label cannot be empty")
+    return vals
+end
+
+function _as_float_vec(x, label::String)
+    x isa Vector || error("$label must be array")
+    vals = Float64[]
+    for v in x
+        v isa Real || error("$label entries must be numeric")
+        push!(vals, Float64(v))
     end
     isempty(vals) && error("$label cannot be empty")
     return vals
@@ -59,9 +75,12 @@ function load_parameters(path::AbstractString)
     train = _as_dict(_require(cfg, "train"), "train")
     train_ema = haskey(train, "ema") ? _as_dict(train["ema"], "train.ema") : Dict{String,Any}()
     train_loss = haskey(train, "loss") ? _as_dict(train["loss"], "train.loss") : Dict{String,Any}()
+    train_resume = haskey(train, "resume") ? _as_dict(train["resume"], "train.resume") : Dict{String,Any}()
     kl_eval = _as_dict(_require(train, "kl_eval"), "train.kl_eval")
     langevin = _as_dict(_require(cfg, "langevin"), "langevin")
     langevin_quick = haskey(langevin, "quick") ? _as_dict(langevin["quick"], "langevin.quick") : Dict{String,Any}()
+    responses = haskey(cfg, "responses") ? _as_dict(cfg["responses"], "responses") : Dict{String,Any}()
+    responses_reference = haskey(responses, "reference") ? _as_dict(responses["reference"], "responses.reference") : Dict{String,Any}()
     figures = _as_dict(_require(cfg, "figures"), "figures")
     output = _as_dict(_require(cfg, "output"), "output")
 
@@ -110,9 +129,14 @@ function load_parameters(path::AbstractString)
         "train.norm_groups" => _as_int(_get(train, "norm_groups", 0), "train.norm_groups"),
         "train.loss.x_weight" => _as_float(_get(train_loss, "x_weight", 1.0), "train.loss.x_weight"),
         "train.loss.y_weight" => _as_float(_get(train_loss, "y_weight", 1.0), "train.loss.y_weight"),
+        "train.loss.mean_weight" => _as_float(_get(train_loss, "mean_weight", 0.0), "train.loss.mean_weight"),
+        "train.loss.cov_weight" => _as_float(_get(train_loss, "cov_weight", 0.0), "train.loss.cov_weight"),
         "train.ema.enabled" => _as_bool(_get(train_ema, "enabled", true), "train.ema.enabled"),
         "train.ema.decay" => _as_float(_get(train_ema, "decay", 0.999), "train.ema.decay"),
         "train.ema.use_for_eval" => _as_bool(_get(train_ema, "use_for_eval", true), "train.ema.use_for_eval"),
+        "train.resume.enabled" => _as_bool(_get(train_resume, "enabled", false), "train.resume.enabled"),
+        "train.resume.source_run_dir" => _as_string_allow_empty(_get(train_resume, "source_run_dir", ""), "train.resume.source_run_dir"),
+        "train.resume.state_path" => _as_string_allow_empty(_get(train_resume, "state_path", ""), "train.resume.state_path"),
 
         "train.kl_eval.enabled" => _as_bool(_get(kl_eval, "enabled", true), "train.kl_eval.enabled"),
         "train.kl_eval.kl_eval_interval_epochs" => _as_int(_get(kl_eval, "kl_eval_interval_epochs", 10), "train.kl_eval.kl_eval_interval_epochs"),
@@ -136,6 +160,31 @@ function load_parameters(path::AbstractString)
         "langevin.quick.burn_in" => _as_int(_get(langevin_quick, "burn_in", _get(langevin, "burn_in", 5000)), "langevin.quick.burn_in"),
         "langevin.quick.ensembles" => _as_int(_get(langevin_quick, "ensembles", _get(langevin, "ensembles", 256)), "langevin.quick.ensembles"),
 
+        "responses.enabled" => _as_bool(_get(responses, "enabled", true), "responses.enabled"),
+        "responses.params_path" => _as_string(_get(responses, "params_path", "scripts/L96/parameters_responses.toml"), "responses.params_path"),
+        "responses.methods_override" => _as_string_allow_empty(_get(responses, "methods_override", ""), "responses.methods_override"),
+        "responses.score_device" => _as_string_allow_empty(_get(responses, "score_device", ""), "responses.score_device"),
+        "responses.run_prefix" => _as_string(_get(responses, "run_prefix", "run_"), "responses.run_prefix"),
+        "responses.dataset_attr_sync_mode" => _as_string(_get(responses, "dataset_attr_sync_mode", "override"), "responses.dataset_attr_sync_mode"),
+        "responses.save_every_override" => _as_int(_get(responses, "save_every_override", 0), "responses.save_every_override"),
+        "responses.history_min_alpha" => _as_float(_get(responses, "history_min_alpha", 0.2), "responses.history_min_alpha"),
+        "responses.gfdt_nsamples_override" => _as_int(_get(responses, "gfdt_nsamples_override", 0), "responses.gfdt_nsamples_override"),
+        "responses.numerical_ensembles_override" => _as_int(_get(responses, "numerical_ensembles_override", 0), "responses.numerical_ensembles_override"),
+        "responses.plot_gaussian" => _as_bool(_get(responses, "plot_gaussian", false), "responses.plot_gaussian"),
+        "responses.plot_numerical" => _as_bool(_get(responses, "plot_numerical", false), "responses.plot_numerical"),
+        "responses.reference.cache_root" => _as_string(_get(responses_reference, "cache_root", "scripts/L96/reference_responses_cache"), "responses.reference.cache_root"),
+        "responses.reference.force_regenerate" => _as_bool(_get(responses_reference, "force_regenerate", false), "responses.reference.force_regenerate"),
+        "responses.reference.gfdt_nsamples" => _as_int(_get(responses_reference, "gfdt_nsamples", 200_000), "responses.reference.gfdt_nsamples"),
+        "responses.reference.gfdt_start_index" => _as_int(_get(responses_reference, "gfdt_start_index", 50_001), "responses.reference.gfdt_start_index"),
+        "responses.reference.numerical_ensembles" => _as_int(_get(responses_reference, "numerical_ensembles", 16_384), "responses.reference.numerical_ensembles"),
+        "responses.reference.numerical_start_index" => _as_int(_get(responses_reference, "numerical_start_index", 80_001), "responses.reference.numerical_start_index"),
+        "responses.reference.numerical_method" => _as_string(_get(responses_reference, "numerical_method", "tangent"), "responses.reference.numerical_method"),
+        "responses.reference.h_rel" => _as_float(_get(responses_reference, "h_rel", 5e-3), "responses.reference.h_rel"),
+        "responses.reference.h_abs" => _as_float_vec(_get(responses_reference, "h_abs", [1e-2, 1e-3, 1e-2, 1e-2]), "responses.reference.h_abs"),
+        "responses.reference.numerical_seed_base" => _as_int(_get(responses_reference, "numerical_seed_base", 1_920_000), "responses.reference.numerical_seed_base"),
+        "responses.reference.tmax" => _as_float(_get(responses_reference, "tmax", 2.0), "responses.reference.tmax"),
+        "responses.reference.mean_center" => _as_bool(_get(responses_reference, "mean_center", true), "responses.reference.mean_center"),
+
         "figures.dpi" => _as_int(_get(figures, "dpi", 180), "figures.dpi"),
         "figures.style" => _as_string(_get(figures, "style", "publication"), "figures.style"),
 
@@ -158,8 +207,14 @@ function validate!(params::Dict{String,Any})
     params["train.norm_groups"] >= 0 || error("train.norm_groups must be >= 0")
     params["train.loss.x_weight"] > 0 || error("train.loss.x_weight must be > 0")
     params["train.loss.y_weight"] > 0 || error("train.loss.y_weight must be > 0")
+    params["train.loss.mean_weight"] >= 0 || error("train.loss.mean_weight must be >= 0")
+    params["train.loss.cov_weight"] >= 0 || error("train.loss.cov_weight must be >= 0")
     params["train.ema.decay"] > 0 || error("train.ema.decay must be > 0")
     params["train.ema.decay"] < 1 || error("train.ema.decay must be < 1")
+    if params["train.resume.enabled"]
+        isempty(params["train.resume.source_run_dir"]) && isempty(params["train.resume.state_path"]) &&
+            error("train.resume.enabled=true requires train.resume.source_run_dir or train.resume.state_path")
+    end
     params["langevin.ensembles"] >= 1 || error("langevin.ensembles must be >= 1")
     params["langevin.nsteps"] > params["langevin.burn_in"] || error("langevin.nsteps must be > langevin.burn_in")
     params["langevin.min_kept_snapshots_warn"] >= 1 || error("langevin.min_kept_snapshots_warn must be >= 1")
@@ -175,6 +230,19 @@ function validate!(params::Dict{String,Any})
     params["data.generation.save_every"] >= 1 || error("data.generation.save_every must be >= 1")
     params["data.generation.nsamples"] >= 1 || error("data.generation.nsamples must be >= 1")
     params["data.generation.process_noise_sigma"] >= 0 || error("data.generation.process_noise_sigma must be >= 0")
+    params["responses.save_every_override"] >= 0 || error("responses.save_every_override must be >= 0")
+    params["responses.history_min_alpha"] >= 0 || error("responses.history_min_alpha must be >= 0")
+    params["responses.history_min_alpha"] <= 1 || error("responses.history_min_alpha must be <= 1")
+    params["responses.gfdt_nsamples_override"] >= 0 || error("responses.gfdt_nsamples_override must be >= 0")
+    params["responses.numerical_ensembles_override"] >= 0 || error("responses.numerical_ensembles_override must be >= 0")
+    params["responses.reference.gfdt_nsamples"] >= 1 || error("responses.reference.gfdt_nsamples must be >= 1")
+    params["responses.reference.gfdt_start_index"] >= 1 || error("responses.reference.gfdt_start_index must be >= 1")
+    params["responses.reference.numerical_ensembles"] >= 1 || error("responses.reference.numerical_ensembles must be >= 1")
+    params["responses.reference.numerical_start_index"] >= 1 || error("responses.reference.numerical_start_index must be >= 1")
+    params["responses.reference.h_rel"] > 0 || error("responses.reference.h_rel must be > 0")
+    length(params["responses.reference.h_abs"]) == 4 || error("responses.reference.h_abs must contain exactly 4 entries")
+    params["responses.reference.numerical_seed_base"] >= 0 || error("responses.reference.numerical_seed_base must be >= 0")
+    params["responses.reference.tmax"] > 0 || error("responses.reference.tmax must be > 0")
 
     if params["train.kl_eval.enabled"]
         params["train.kl_eval.kl_eval_interval_epochs"] >= 1 || error("train.kl_eval.kl_eval_interval_epochs must be >= 1")
@@ -182,6 +250,12 @@ function validate!(params::Dict{String,Any})
 
     nt = lowercase(params["train.norm_type"])
     (nt == "batch" || nt == "group") || error("train.norm_type must be 'batch' or 'group'")
+    rsm = lowercase(params["responses.dataset_attr_sync_mode"])
+    (rsm == "off" || rsm == "warn" || rsm == "error" || rsm == "override") ||
+        error("responses.dataset_attr_sync_mode must be one of: off, warn, error, override")
+    rnm = lowercase(params["responses.reference.numerical_method"])
+    (rnm == "tangent" || rnm == "finite_difference") ||
+        error("responses.reference.numerical_method must be 'tangent' or 'finite_difference'")
     ma = params["train.model_arch"]
     (ma == "schneider_dualstream" || ma == "multichannel_unet") ||
         error("train.model_arch must be 'schneider_dualstream' or 'multichannel_unet'")

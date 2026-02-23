@@ -1,0 +1,100 @@
+[l96]
+J = 10
+c = 10.0
+save_every = 20
+delta_t_obs = 0.1
+process_noise_sigma = 0.03
+b = 10.0
+dt = 0.005
+K = 36
+h = 1.0
+F = 10.0
+
+[score_correction.unet]
+post_deviation_pinv = 2.627705088827994
+ridge = 1.0e-8
+post_identity_rmse = 0.6744785277063575
+post_identity_rmse_pinv = 3.130923610109163e-8
+post_deviation = 0.0
+solver = "identity_fallback"
+cond_regularized = 104.24787592123845
+post_deviation_direct = 2.6277050888279945
+pre_identity_rmse = 0.6744785277063575
+post_identity_rmse_direct = 3.13092360336133e-8
+max_deviation = 1.5
+
+[score_correction.gaussian]
+post_deviation_pinv = 6.65948944073927e-6
+ridge = 1.0e-8
+post_identity_rmse = 1.0000065713772241e-8
+post_identity_rmse_pinv = 1.0000065713772241e-8
+post_deviation = 6.65948944073927e-6
+solver = "pinv"
+cond_regularized = 1.0000000053404332
+post_deviation_direct = 6.659489439808648e-6
+pre_identity_rmse = 6.669445091085705e-6
+post_identity_rmse_direct = 1.0000066644564635e-8
+max_deviation = 1.5
+
+[outputs]
+figure_raw = "/home/ludogio/Documents/JuliaProjects/ScoreUNet1D.jl/scripts/L96/calibration_outputs/_final_current_scale002/responses_5x4_three_methods_raw.png"
+responses_csv = "/home/ludogio/Documents/JuliaProjects/ScoreUNet1D.jl/scripts/L96/calibration_outputs/_final_current_scale002/responses_5x4_all_methods.csv"
+responses_hdf5 = "/home/ludogio/Documents/JuliaProjects/ScoreUNet1D.jl/scripts/L96/calibration_outputs/_final_current_scale002/responses_5x4_all_methods.hdf5"
+figure_corrected = "/home/ludogio/Documents/JuliaProjects/ScoreUNet1D.jl/scripts/L96/calibration_outputs/_final_current_scale002/responses_5x4_three_methods_corrected.png"
+
+[responses]
+numerical_ensembles_used = 384
+gfdt_samples_used = 150000
+numerical_method = "finite_difference"
+n_lags = 60
+tmax_effective = 6.0
+
+    [responses.finite_difference_h]
+    c = 0.05
+    b = 0.05
+    h = 0.005
+    F = 0.05
+
+[score_model]
+forward_mode = "train"
+independent_of_method3_tuning = true
+
+[rmse_vs_numerical.gfdt_unet_corrected]
+overall = 31.94896101780624
+
+    [rmse_vs_numerical.gfdt_unet_corrected.per_param]
+    c = 8.872364483248196
+    b = 8.786020099321389
+    h = 62.658580966012615
+    F = 0.9662665706578972
+
+[rmse_vs_numerical.gfdt_unet_raw]
+overall = 31.948961017806244
+
+    [rmse_vs_numerical.gfdt_unet_raw.per_param]
+    c = 8.872364483248198
+    b = 8.78602009932139
+    h = 62.658580966012615
+    F = 0.966266570657897
+
+[rmse_vs_numerical.gfdt_gaussian_raw]
+overall = 99.32399370608005
+
+    [rmse_vs_numerical.gfdt_gaussian_raw.per_param]
+    c = 0.5626457933888901
+    b = 56.147098330424114
+    h = 190.5181437077634
+    F = 3.323642555179776
+
+[rmse_vs_numerical.gfdt_gaussian_corrected]
+overall = 99.32466788061178
+
+    [rmse_vs_numerical.gfdt_gaussian_corrected.per_param]
+    c = 0.5626474211921876
+    b = 56.14747273894081
+    h = 190.519438662422
+    F = 3.3236761334811895
+
+[checkpoint]
+epoch = 20
+path = "/home/ludogio/Documents/JuliaProjects/ScoreUNet1D.jl/scripts/L96/runs_J10/run_026/model/score_model_epoch_0020.bson"

@@ -1,0 +1,96 @@
+
+[score_correction.unet]
+post_deviation_pinv = 12095.906841158016
+ridge = 1.0e-8
+post_identity_rmse = 11.599473309738515
+post_identity_rmse_pinv = 0.00012095911489465255
+post_deviation = 0.0
+solver = "identity_fallback"
+cond_regularized = 1.6468048639628723e7
+post_deviation_direct = 12095.906844227206
+pre_identity_rmse = 11.599473309738515
+post_identity_rmse_direct = 0.00012095912196014496
+max_deviation = 10.0
+[correction]
+ridge = 1.0e-8
+max_deviation = 10.0
+
+[dataset_attr_sync]
+dataset_path = "scripts/L96/observations/J10/l96_timeseries.hdf5"
+applied_override = true
+mode = "override"
+dataset_key = "timeseries"
+
+    [dataset_attr_sync.attrs]
+    J = 10
+    c = 5.0
+    save_every = 1
+    process_noise_sigma = 0.05
+    b = 10.0
+    dt = 0.005
+    K = 36
+    h = 1.0
+    F = 10.0
+
+    [dataset_attr_sync.mismatches.save_every]
+    config = 5
+    dataset = 1
+
+[outputs]
+parameters_used_toml = "/home/ludogio/Documents/JuliaProjects/ScoreUNet1D.jl/scripts/L96/responses_results/run_039/parameters_used.toml"
+reference_cache_hdf5 = ""
+reference_cache_generated = false
+figure_raw = "/home/ludogio/Documents/JuliaProjects/ScoreUNet1D.jl/scripts/L96/responses_results/run_039/responses_5x4_selected_methods_raw.png"
+responses_csv = "/home/ludogio/Documents/JuliaProjects/ScoreUNet1D.jl/scripts/L96/responses_results/run_039/responses_5x4_selected_methods.csv"
+responses_hdf5 = "/home/ludogio/Documents/JuliaProjects/ScoreUNet1D.jl/scripts/L96/responses_results/run_039/responses_5x4_selected_methods.hdf5"
+figure_corrected = "/home/ludogio/Documents/JuliaProjects/ScoreUNet1D.jl/scripts/L96/responses_results/run_039/responses_5x4_selected_methods_corrected.png"
+
+[rmse_vs_numerical]
+
+[l96]
+J = 10
+c = 5.0
+save_every = 1
+delta_t_obs = 0.005
+process_noise_sigma = 0.05
+b = 10.0
+dt = 0.005
+K = 36
+h = 1.0
+F = 10.0
+
+[methods]
+unet = true
+numerical = false
+gaussian = false
+
+[responses]
+numerical_ensembles_used = 0
+tmax_requested = 6.0
+tmax_used = 6.0
+gfdt_samples_used = 1500
+numerical_method = "tangent"
+time_points = 301
+n_lags = 300
+tmax_effective = 2.0
+
+[run]
+params_toml = "/home/ludogio/Documents/JuliaProjects/ScoreUNet1D.jl/scripts/L96/parameters_responses.toml"
+id = 39
+generated_at_utc = "2026-02-22T17:10:51.885"
+output_dir = "/home/ludogio/Documents/JuliaProjects/ScoreUNet1D.jl/scripts/L96/responses_results/run_039"
+
+[finite_difference_h]
+c = 0.01
+b = 0.01
+h = 0.001
+F = 0.01
+
+[score_model]
+checkpoint_epoch = 20
+selected_device = "GPU:0"
+checkpoint_path = "/home/ludogio/Documents/JuliaProjects/ScoreUNet1D.jl/scripts/L96/runs_J10/run_031/model/score_model_epoch_0020.bson"
+forward_mode = "train"
+independent_of_method3_tuning = true
+requested_device = "auto"
+selection_reason = "auto->GPU:0 (used=8MB total=11264MB util=0.0%)"

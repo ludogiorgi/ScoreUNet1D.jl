@@ -1,3 +1,8 @@
+# Standard command (from repository root):
+# julia --project=. scripts/L96/lib/sample_and_compare.jl
+# Nohup command:
+# nohup julia --project=. scripts/L96/lib/sample_and_compare.jl > scripts/L96/nohup_sample_and_compare.log 2>&1 &
+
 if get(ENV, "GKSwstype", "") == ""
     ENV["GKSwstype"] = "100"
 end
@@ -58,6 +63,8 @@ const SCORE_EVAL_BATCH = parse(Int, get(ENV, "L96_SCORE_EVAL_BATCH", "256"))
 const SCORE_EVAL_SEED = parse(Int, get(ENV, "L96_SCORE_EVAL_SEED", "123"))
 const SCORE_SCATTER_POINTS = parse(Int, get(ENV, "L96_SCORE_SCATTER_POINTS", "12000"))
 const SYM_MAX_POINTS = parse(Int, get(ENV, "L96_SYM_MAX_POINTS", "450000"))
+const STEIN_TARGET_SAMPLES = parse(Int, get(ENV, "L96_STEIN_TARGET_SAMPLES", "4096"))
+const STEIN_BATCH_SIZE = parse(Int, get(ENV, "L96_STEIN_BATCH_SIZE", "256"))
 const STYLE_DPI = parse(Int, get(ENV, "L96_FIG_DPI", "170"))
 
 function setup_plot_style!()
@@ -272,59 +279,73 @@ function average_mode_acf(tensor::Array{Float32,3}, mode::Symbol, max_lag::Int)
     return acc ./ n
 end
 
-function mode_moment_panel(tensor_truth::Array{Float32,3},
-                           tensor_gen::Array{Float32,3})
+function mode_stat_panel(tensor_truth::Array{Float32,3},
+                         tensor_gen::Array{Float32,3};
+                         stat::Symbol=:mean)
     L, C, _ = size(tensor_truth)
+    (stat == :mean || stat == :var) || error("mode_stat_panel supports stat=:mean or stat=:var")
+
+    stat_name = stat == :mean ? "mean" : "variance"
+    reduce_fn = stat == :mean ? mean : var
 
     x_idx = collect(1:L)
-    x_mean_t = [mean(@view tensor_truth[k, 1, :]) for k in 1:L]
-    x_mean_g = [mean(@view tensor_gen[k, 1, :]) for k in 1:L]
-    x_var_t = [var(@view tensor_truth[k, 1, :]) for k in 1:L]
-    x_var_g = [var(@view tensor_gen[k, 1, :]) for k in 1:L]
+    x_stat_t = [reduce_fn(@view tensor_truth[k, 1, :]) for k in 1:L]
+    x_stat_g = [reduce_fn(@view tensor_gen[k, 1, :]) for k in 1:L]
 
     ny = L * max(C - 1, 1)
     y_idx = collect(1:ny)
-    y_mean_t = Vector{Float64}(undef, ny)
-    y_mean_g = Vector{Float64}(undef, ny)
-    y_var_t = Vector{Float64}(undef, ny)
-    y_var_g = Vector{Float64}(undef, ny)
+    y_stat_t = Vector{Float64}(undef, ny)
+    y_stat_g = Vector{Float64}(undef, ny)
     if C >= 2
         @inbounds for c in 2:C, k in 1:L
             m = (c - 2) * L + k
-            y_mean_t[m] = mean(@view tensor_truth[k, c, :])
-            y_mean_g[m] = mean(@view tensor_gen[k, c, :])
-            y_var_t[m] = var(@view tensor_truth[k, c, :])
-            y_var_g[m] = var(@view tensor_gen[k, c, :])
+            y_stat_t[m] = reduce_fn(@view tensor_truth[k, c, :])
+            y_stat_g[m] = reduce_fn(@view tensor_gen[k, c, :])
         end
     else
-        fill!(y_mean_t, NaN)
-        fill!(y_mean_g, NaN)
-        fill!(y_var_t, NaN)
-        fill!(y_var_g, NaN)
+        fill!(y_stat_t, NaN)
+        fill!(y_stat_g, NaN)
     end
 
-    p = plot(x_idx, x_mean_t;
-             label="x mean truth",
+    p = plot(x_idx, x_stat_t;
+             label="obs X $stat_name",
              color=:dodgerblue3,
              marker=:circle,
              markersize=3,
              xlabel="x-mode index k",
-             ylabel="Moment value",
-             title="Mode Moments (x bottom axis, y top axis)")
-    plot!(p, x_idx, x_mean_g; label="x mean gen", color=:dodgerblue3, linestyle=:dash, marker=:diamond, markersize=3)
-    plot!(p, x_idx, x_var_t; label="x var truth", color=:navy, marker=:circle, markersize=3)
-    plot!(p, x_idx, x_var_g; label="x var gen", color=:navy, linestyle=:dash, marker=:diamond, markersize=3)
+             ylabel=stat_name,
+             title="Mode $stat_name comparison (x bottom axis, y top axis)")
+    plot!(p, x_idx, x_stat_g; label="pred X $stat_name", color=:dodgerblue3, linestyle=:dash, marker=:diamond, markersize=3)
 
     pt = twiny(p)
-    plot!(pt, y_idx, y_mean_t; label="y mean truth", color=:tomato3, marker=:circle, markersize=2, alpha=0.85)
-    plot!(pt, y_idx, y_mean_g; label="y mean gen", color=:tomato3, linestyle=:dash, marker=:diamond, markersize=2, alpha=0.85)
-    plot!(pt, y_idx, y_var_t; label="y var truth", color=:darkorange3, marker=:circle, markersize=2, alpha=0.85)
-    plot!(pt, y_idx, y_var_g; label="y var gen", color=:darkorange3, linestyle=:dash, marker=:diamond, markersize=2, alpha=0.85)
+    plot!(pt, y_idx, y_stat_t; label="", color=:tomato3, marker=:circle, markersize=2, alpha=0.85)
+    plot!(pt, y_idx, y_stat_g; label="", color=:tomato3, linestyle=:dash, marker=:diamond, markersize=2, alpha=0.85)
     xlabel!(pt, "y-mode flattened index (top axis)")
+
+    # Keep all legend entries on the base plot for consistent rendering with twiny.
+    plot!(p, [NaN], [NaN]; label="obs Y $stat_name", color=:tomato3, marker=:circle, markersize=2, alpha=0.85)
+    plot!(p, [NaN], [NaN]; label="pred Y $stat_name", color=:tomato3, linestyle=:dash, marker=:diamond, markersize=2, alpha=0.85)
     return p
 end
 
-function save_stats_figure_3x3(out_path::AbstractString,
+function stein_blocks_for_l96(stein::Matrix{Float64}, K::Int, C::Int)
+    C >= 2 || error("Need at least 2 channels to extract X/Y Stein blocks")
+    size(stein, 1) == K * C || error("Stein matrix dimension mismatch for K=$K C=$C")
+    size(stein, 2) == K * C || error("Stein matrix must be square")
+
+    x_block = Matrix{Float64}(stein[1:K, 1:K])
+    J = C - 1
+    y_block_avg = zeros(Float64, K, K)
+    @inbounds for j in 1:J
+        first = j * K + 1
+        last = (j + 1) * K
+        y_block_avg .+= stein[first:last, first:last]
+    end
+    y_block_avg ./= max(J, 1)
+    return x_block, y_block_avg
+end
+
+function save_stats_figure_4x3(out_path::AbstractString,
                                p_pdf_x,
                                p_pdf_y,
                                p_joint_xx,
@@ -333,8 +354,11 @@ function save_stats_figure_3x3(out_path::AbstractString,
                                p_qq_x,
                                p_qq_y,
                                p_heat_kl,
-                               p_mom)
-    for p in (p_pdf_x, p_pdf_y, p_joint_xx, p_joint_yy, p_joint_xy, p_qq_x, p_qq_y, p_heat_kl, p_mom)
+                               p_mom_var,
+                               p_mom_mean,
+                               p_stein_x,
+                               p_stein_y)
+    for p in (p_pdf_x, p_pdf_y, p_joint_xx, p_joint_yy, p_joint_xy, p_qq_x, p_qq_y, p_heat_kl, p_mom_var, p_mom_mean, p_stein_x, p_stein_y)
         plot!(
             p;
             left_margin=12Plots.mm,
@@ -351,9 +375,10 @@ function save_stats_figure_3x3(out_path::AbstractString,
     fig = plot(
         p_pdf_x, p_pdf_y, p_heat_kl,
         p_joint_xx, p_joint_yy, p_joint_xy,
-        p_qq_x, p_qq_y, p_mom;
-        layout=grid(3, 3),
-        size=(2150, 1900),
+        p_qq_x, p_qq_y, p_mom_var,
+        p_mom_mean, p_stein_x, p_stein_y;
+        layout=grid(4, 3),
+        size=(2350, 2450),
         left_margin=6Plots.mm,
         right_margin=6Plots.mm,
         top_margin=6Plots.mm,
@@ -931,6 +956,39 @@ function main()
                         color=:viridis)
     truth_mean, gen_mean, truth_std, gen_std, rel_std_err = channel_moment_stats(tensor_truth, tensor_gen)
 
+    stein_stride = max(cld(length(dataset), max(STEIN_TARGET_SAMPLES, 1)), 1)
+    stein_matrix = compute_stein_matrix(
+        model,
+        dataset,
+        trainer_cfg.sigma;
+        batch_size=STEIN_BATCH_SIZE,
+        device=device,
+        sample_stride=stein_stride,
+    )
+    stein_x_block, stein_y_block = stein_blocks_for_l96(stein_matrix, L, C)
+    stein_clim = max(maximum(abs, stein_x_block), maximum(abs, stein_y_block))
+    stein_clim = stein_clim <= 0 ? 1e-12 : stein_clim
+    p_stein_x = heatmap(
+        1:L,
+        1:L,
+        stein_x_block;
+        xlabel="x-mode index k'",
+        ylabel="x-mode index k",
+        title="Stein block <s_X x_X^T>",
+        color=:balance,
+        clims=(-stein_clim, stein_clim),
+    )
+    p_stein_y = heatmap(
+        1:L,
+        1:L,
+        stein_y_block;
+        xlabel="x-mode index k'",
+        ylabel="x-mode index k",
+        title="Stein block avg_j <s_{Y_j} Y_j^T>",
+        color=:balance,
+        clims=(-stein_clim, stein_clim),
+    )
+
     score_diag = score_prediction_diagnostics(
         model,
         tensor_truth,
@@ -942,8 +1000,9 @@ function main()
         scatter_points=SCORE_SCATTER_POINTS,
     )
     # Requested publication figures:
-    p_mom = mode_moment_panel(tensor_truth, tensor_gen)
-    figB_path = save_stats_figure_3x3(
+    p_mom_var = mode_stat_panel(tensor_truth, tensor_gen; stat=:var)
+    p_mom_mean = mode_stat_panel(tensor_truth, tensor_gen; stat=:mean)
+    figB_path = save_stats_figure_4x3(
         joinpath(FIG_DIR, "figB_stats_3x3.png"),
         p_pdf_x,
         p_pdf_y,
@@ -953,7 +1012,10 @@ function main()
         p_qq_x,
         p_qq_y,
         p_heat_kl,
-        p_mom,
+        p_mom_var,
+        p_mom_mean,
+        p_stein_x,
+        p_stein_y,
     )
     figC_path = save_dynamics_figure_3x2(
         joinpath(FIG_DIR, "figC_dynamics_3x2.png"),
@@ -990,6 +1052,9 @@ function main()
         "burn_in_snapshots_per_ensemble" => Float64(kept_diag.burn_snapshots),
         "min_kept_snapshots_warn_threshold" => Float64(MIN_KEPT_SNAPSHOTS_WARN),
         "kept_snapshots_warn_flag" => kept_diag.kept_per_ensemble < MIN_KEPT_SNAPSHOTS_WARN ? 1.0 : 0.0,
+        "stein_sample_stride" => Float64(stein_stride),
+        "stein_x_block_trace" => tr(stein_x_block),
+        "stein_y_block_trace_avg" => tr(stein_y_block),
     )
     write_metrics(METRICS_PATH, metrics)
     if !PIPELINE_MODE

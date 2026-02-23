@@ -1,0 +1,128 @@
+
+[score_correction.unet]
+post_deviation_pinv = 0.8849501643658326
+ridge = 1.0e-8
+post_identity_rmse = 1.4198079859774647e-8
+post_identity_rmse_pinv = 1.4198079859774647e-8
+post_deviation = 0.8849501643658326
+solver = "pinv"
+cond_regularized = 20.64762252091181
+post_deviation_direct = 0.8849501643658324
+pre_identity_rmse = 0.7221214818552073
+post_identity_rmse_direct = 1.4198079899662022e-8
+max_deviation = 10.0
+[correction]
+ridge = 1.0e-8
+max_deviation = 10.0
+
+[dataset_attr_sync]
+dataset_path = "scripts/L96/observations/J10/l96_timeseries_save20_200k.hdf5"
+applied_override = false
+mode = "warn"
+dataset_key = "timeseries"
+
+    [dataset_attr_sync.attrs]
+    J = 10
+    c = 5.0
+    save_every = 5
+    process_noise_sigma = 0.05
+    b = 10.0
+    dt = 0.005
+    K = 36
+    h = 1.0
+    F = 10.0
+
+    [dataset_attr_sync.mismatches]
+
+[outputs]
+parameters_used_toml = "/home/ludogio/Documents/JuliaProjects/ScoreUNet1D.jl/scripts/L96/responses_results/run_043/parameters_used.toml"
+reference_cache_hdf5 = "/home/ludogio/Documents/JuliaProjects/ScoreUNet1D.jl/scripts/L96/reference_responses_cache/reference_af054506f9bcb295d79a1cefd90cd13f60f874d1.hdf5"
+reference_cache_generated = true
+figure_raw = "/home/ludogio/Documents/JuliaProjects/ScoreUNet1D.jl/scripts/L96/responses_results/run_043/responses_5x4_selected_methods_raw.png"
+responses_csv = "/home/ludogio/Documents/JuliaProjects/ScoreUNet1D.jl/scripts/L96/responses_results/run_043/responses_5x4_selected_methods.csv"
+responses_hdf5 = "/home/ludogio/Documents/JuliaProjects/ScoreUNet1D.jl/scripts/L96/responses_results/run_043/responses_5x4_selected_methods.hdf5"
+figure_corrected = "/home/ludogio/Documents/JuliaProjects/ScoreUNet1D.jl/scripts/L96/responses_results/run_043/responses_5x4_selected_methods_corrected.png"
+
+[rmse_vs_numerical.gfdt_unet_corrected]
+overall = 14.033727251825166
+
+    [rmse_vs_numerical.gfdt_unet_corrected.per_param]
+    c = 2.704439791163338
+    b = 4.011900923940025
+    h = 27.64647418714033
+    F = 0.21242346086645367
+
+[rmse_vs_numerical.gfdt_unet_raw]
+overall = 7.692367284612812
+
+    [rmse_vs_numerical.gfdt_unet_raw.per_param]
+    c = 3.164871977259471
+    b = 3.243230440001498
+    h = 14.699811698329171
+    F = 0.2657733617131106
+
+[rmse_vs_numerical.gfdt_gaussian_raw]
+overall = 22.238536055968225
+
+    [rmse_vs_numerical.gfdt_gaussian_raw.per_param]
+    c = 3.048147862768626
+    b = 10.892176677921881
+    h = 43.00712912334597
+    F = 0.8161311425723732
+
+[rmse_vs_numerical.gfdt_gaussian_corrected]
+overall = 22.238689389501413
+
+    [rmse_vs_numerical.gfdt_gaussian_corrected.per_param]
+    c = 3.048166943318437
+    b = 10.892249625400321
+    h = 43.007426307387234
+    F = 0.8161383762414045
+
+[l96]
+J = 10
+c = 5.0
+save_every = 5
+delta_t_obs = 0.025
+process_noise_sigma = 0.05
+b = 10.0
+dt = 0.005
+K = 36
+h = 1.0
+F = 10.0
+
+[methods]
+unet = true
+numerical = true
+gaussian = true
+
+[responses]
+numerical_ensembles_used = 16384
+tmax_requested = 6.0
+tmax_used = 6.0
+gfdt_samples_used = 150000
+numerical_method = "finite_difference"
+time_points = 301
+n_lags = 300
+tmax_effective = 2.0
+
+[run]
+params_toml = "/home/ludogio/Documents/JuliaProjects/ScoreUNet1D.jl/scripts/L96/parameters_responses.toml"
+id = 43
+generated_at_utc = "2026-02-22T17:28:23.172"
+output_dir = "/home/ludogio/Documents/JuliaProjects/ScoreUNet1D.jl/scripts/L96/responses_results/run_043"
+
+[finite_difference_h]
+c = 0.05
+b = 0.05
+h = 0.02
+F = 0.05
+
+[score_model]
+checkpoint_epoch = 20
+selected_device = "GPU:0"
+checkpoint_path = "/home/ludogio/Documents/JuliaProjects/ScoreUNet1D.jl/scripts/L96/runs_J10/run_031/model/score_model_epoch_0020.bson"
+forward_mode = "train"
+independent_of_method3_tuning = true
+requested_device = "auto"
+selection_reason = "auto->GPU:0 (used=8MB total=11264MB util=0.0%)"

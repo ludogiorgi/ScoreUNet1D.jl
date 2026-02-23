@@ -1,0 +1,148 @@
+[run]
+J = 10
+runs_root = "scripts/L96"
+run_folder_prefix = "runs_J"
+run_id_padding = 3
+seed = 7
+
+[data]
+# `path` is overwritten by the pipeline to the J-indexed observations repository path.
+path = "scripts/L96/observations/J10/l96_timeseries_fast.hdf5"
+observations_root = "scripts/L96/observations"
+dataset_filename = "l96_timeseries_fast.hdf5"
+integration_params_filename = "integration_params_fast.toml"
+dataset_key = "timeseries"
+normalization_mode = "per_channel" # "split_xy" or "per_channel"
+generate_if_missing = true
+
+[data.generation]
+K = 36
+F = 10.0
+h = 1.0
+c = 5.0
+b = 10.0
+dt = 0.005
+# spinup_steps = 20_000
+spinup_steps = 2_000
+# save_every = 100
+save_every = 1
+# nsamples = 10_000_000
+nsamples = 1_500
+process_noise_sigma = 0.05
+stochastic_x_noise = false
+rng_seed = 7
+
+[train]
+device = "CPU"
+# num_training_epochs = 45
+num_training_epochs = 2
+# batch_size = 128
+batch_size = 64
+lr = 8e-4
+sigma = 0.05
+# base_channels = 32
+base_channels = 24
+# channel_multipliers = [1, 2]
+channel_multipliers = [1]
+model_arch = "schneider_dualstream"
+progress = false
+# use_lr_schedule = true
+use_lr_schedule = false
+# warmup_steps = 500
+warmup_steps = 0
+min_lr_factor = 0.1
+norm_type = "batch"
+norm_groups = 0
+
+[train.loss]
+x_weight = 1.0
+y_weight = 1.0
+
+[train.ema]
+enabled = true
+decay = 0.999
+use_for_eval = true
+
+[train.resume]
+enabled = false
+source_run_dir = ""
+state_path = ""
+
+[train.kl_eval]
+enabled = true
+# kl_eval_interval_epochs = 15
+kl_eval_interval_epochs = 1
+
+[langevin]
+# device = "GPU:0"
+device = "CPU"
+# dt = 0.0025
+dt = 0.0025
+# resolution = 40
+resolution = 20
+# nsteps = 400_000
+nsteps = 300
+# burn_in = 40_000
+burn_in = 50
+# ensembles = 64
+ensembles = 2
+# pdf_bins = 60
+pdf_bins = 50
+use_boundary = true
+boundary_min = -8.0
+boundary_max = 8.0
+# min_kept_snapshots_warn = 800
+min_kept_snapshots_warn = 50
+progress = false
+# eval_profile = "full"
+eval_profile = "quick"
+
+[langevin.quick]
+dt = 0.0025
+# resolution = 40
+resolution = 10
+# nsteps = 8_000
+nsteps = 300
+# burn_in = 2_000
+burn_in = 50
+# ensembles = 32
+ensembles = 2
+
+[responses]
+enabled = true
+params_path = "scripts/L96/parameters_responses.toml"
+methods_override = "unet"
+score_device = ""
+run_prefix = "run_"
+dataset_attr_sync_mode = "override"
+save_every_override = 1
+history_min_alpha = 0.2
+gfdt_nsamples_override = 256
+numerical_ensembles_override = 8
+plot_gaussian = true
+plot_numerical = true
+
+[responses.reference]
+cache_root = "scripts/L96/reference_responses_cache_fast"
+force_regenerate = false
+gfdt_nsamples = 256
+gfdt_start_index = 101
+numerical_ensembles = 8
+numerical_start_index = 201
+numerical_method = "tangent"
+h_rel = 0.005
+h_abs = [0.01, 0.001, 0.01, 0.01]
+numerical_seed_base = 1920000
+tmax = 2.0
+mean_center = true
+
+
+[figures]
+dpi = 110
+style = "publication"
+
+[output]
+save_checkpoints = true
+# checkpoint_every = 10
+checkpoint_every = 1
+save_per_epoch_eval = true

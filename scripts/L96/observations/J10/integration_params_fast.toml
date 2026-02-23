@@ -1,0 +1,21 @@
+[integration]
+c = 5.0
+stochastic_process_noise = true
+b = 10.0
+dt = 0.005
+h = 1.0
+coupling_scale = "h*c/J"
+stochastic_x_noise = false
+fast_topology = "twisted_ring_KJ"
+dynamics_reference = "Schneider et al. (2017) Eqs. (11-13)"
+spinup_steps = 2000
+process_noise_sigma = 0.05
+J = 10
+save_every = 1
+K = 36
+F = 10.0
+
+[dataset]
+key = "timeseries"
+shape = [1500, 11, 36]
+path = "/home/ludogio/Documents/JuliaProjects/ScoreUNet1D.jl/scripts/L96/observations/J10/l96_timeseries_fast.hdf5"

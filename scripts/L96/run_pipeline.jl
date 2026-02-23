@@ -10,6 +10,7 @@ include(joinpath(@__DIR__, "lib", "Config.jl"))
 include(joinpath(@__DIR__, "lib", "RunManager.jl"))
 include(joinpath(@__DIR__, "lib", "TrainStage.jl"))
 include(joinpath(@__DIR__, "lib", "LangevinStage.jl"))
+include(joinpath(@__DIR__, "lib", "ResponseStage.jl"))
 include(joinpath(@__DIR__, "lib", "FigureFactory.jl"))
 include(joinpath(@__DIR__, "lib", "Reporting.jl"))
 
@@ -17,6 +18,7 @@ using .L96Config
 using .L96RunManager
 using .L96TrainStage
 using .L96LangevinStage
+using .L96ResponseStage
 using .L96FigureFactory
 using .L96Reporting
 
@@ -27,7 +29,7 @@ function parse_args(args::Vector{String})
         a = args[i]
         if a == "--params"
             i == length(args) && error("--params expects a value")
-            params_path = args[i + 1]
+            params_path = args[i+1]
             i += 2
         else
             error("Unknown argument: $a")
@@ -70,6 +72,7 @@ function prune_run_layout!(run_dir::AbstractString, eval_rows::Vector{Dict{Strin
         eval_dir = joinpath(run_dir, "figures", "eval_epoch_$(epoch_tag)")
         push!(keep, abspath(joinpath(eval_dir, "figB_stats_3x3.png")))
         push!(keep, abspath(joinpath(eval_dir, "figC_dynamics_3x2.png")))
+        push!(keep, abspath(joinpath(eval_dir, "figD_responses_5x4.png")))
     end
 
     for (root, _, files) in walkdir(run_dir; topdown=false)
@@ -160,6 +163,9 @@ function read_dataset_metadata(path::AbstractString, dataset_key::AbstractString
         if haskey(attrs, "stochastic_process_noise")
             out["stochastic_process_noise"] = Bool(read(attrs["stochastic_process_noise"]))
         end
+        if haskey(attrs, "stochastic_x_noise")
+            out["stochastic_x_noise"] = Bool(read(attrs["stochastic_x_noise"]))
+        end
         return out
     end
 end
@@ -180,6 +186,7 @@ function expected_dataset_metadata(params::Dict{String,Any})
         "coupling_scale" => "h*c/J",
         "fast_topology" => "twisted_ring_KJ",
         "stochastic_process_noise" => Float64(params["data.generation.process_noise_sigma"]) > 0.0,
+        "stochastic_x_noise" => Bool(get(params, "data.generation.stochastic_x_noise", false)),
         "shape" => (
             Int(params["data.generation.nsamples"]),
             Int(params["run.J"]) + 1,
@@ -244,6 +251,9 @@ function generate_observations_dataset!(params::Dict{String,Any}, data_path::Abs
     env["L96_SAVE_EVERY"] = string(params["data.generation.save_every"])
     env["L96_NSAMPLES"] = string(params["data.generation.nsamples"])
     env["L96_PROCESS_NOISE_SIGMA"] = string(params["data.generation.process_noise_sigma"])
+    if haskey(params, "data.generation.stochastic_x_noise")
+        env["L96_STOCHASTIC_X_NOISE"] = string(params["data.generation.stochastic_x_noise"])
+    end
     env["L96_RNG_SEED"] = string(params["data.generation.rng_seed"])
     env["L96_DATA_PATH"] = data_path
     env["L96_DATASET_PARAMS_TOML_PATH"] = params_toml
@@ -294,6 +304,24 @@ function ensure_data_available!(params::Dict{String,Any}; base_dir::AbstractStri
     return data_path
 end
 
+function run_eval_and_response!(params::Dict{String,Any},
+                                dirs::Dict{String,String},
+                                epoch::Int,
+                                model_path::AbstractString;
+                                base_dir::AbstractString=pwd())
+    row = L96LangevinStage.run_eval!(params, dirs, epoch, model_path; base_dir=base_dir)
+    tag = String(row["tag"])
+    resp = L96ResponseStage.run_response_figure!(params, dirs, epoch, model_path, tag; base_dir=base_dir)
+    if Bool(get(resp, "enabled", false))
+        row["figure_D"] = String(get(resp, "figD_path", ""))
+        row["response_run_dir"] = String(get(resp, "response_run_dir", ""))
+    else
+        row["figure_D"] = ""
+        row["response_run_dir"] = ""
+    end
+    return row
+end
+
 function main(args=ARGS)
     params_path = parse_args(args)
     params = L96Config.load_parameters(params_path)
@@ -327,14 +355,14 @@ function main(args=ARGS)
     if eval_enabled
         isempty(ckpts) && error("No checkpoints found for KL evaluation. Check training checkpoint interval.")
         for (epoch, model_path) in ckpts
-            row = L96LangevinStage.run_eval!(params, Dict{String,String}(k => String(v) for (k, v) in dirs), epoch, model_path; base_dir=pwd())
+            row = run_eval_and_response!(params, Dict{String,String}(k => String(v) for (k, v) in dirs), epoch, model_path; base_dir=pwd())
             push!(eval_rows, row)
         end
     end
 
     final_epoch = params["train.num_training_epochs"]
     if !eval_enabled || all(r -> Int(r["epoch"]) != final_epoch, eval_rows)
-        row = L96LangevinStage.run_eval!(params, Dict{String,String}(k => String(v) for (k, v) in dirs), final_epoch, training["model_path"]; base_dir=pwd())
+        row = run_eval_and_response!(params, Dict{String,String}(k => String(v) for (k, v) in dirs), final_epoch, training["model_path"]; base_dir=pwd())
         push!(eval_rows, row)
     end
 

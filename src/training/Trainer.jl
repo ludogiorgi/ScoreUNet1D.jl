@@ -1,5 +1,4 @@
 using Flux
-using Flux.Losses: mse
 using Flux.Optimisers
 using Random
 using ProgressMeter
@@ -22,11 +21,23 @@ Base.@kwdef mutable struct ScoreTrainerConfig
     epoch_subset_size::Int = 0  # If > 0, randomly sample this many samples each epoch
     x_loss_weight::Float32 = 1.0f0
     y_loss_weight::Float32 = 1.0f0
+    mean_match_weight::Float32 = 0.0f0
+    cov_match_weight::Float32 = 0.0f0
 end
 
 struct TrainingHistory
     epoch_losses::Vector{Float32}
     batch_losses::Vector{Float32}
+end
+
+Base.@kwdef mutable struct TrainingState
+    epoch::Int = 0
+    global_step::Int = 0
+    opt_state::Any = nothing
+    epoch_losses::Vector{Float32} = Float32[]
+    batch_losses::Vector{Float32} = Float32[]
+    rng::MersenneTwister = MersenneTwister(0)
+    thread_rngs::Vector{MersenneTwister} = MersenneTwister[]
 end
 
 """
@@ -37,29 +48,41 @@ Runs denoising score matching with σ = cfg.sigma.
 function train!(model, dataset::NormalizedDataset, cfg::ScoreTrainerConfig;
     callback::Function=(_, _) -> nothing,
     epoch_callback::Function=(_, _, _) -> nothing,
+    state_callback::Function=(_) -> nothing,
+    initial_state::Union{Nothing,TrainingState}=nothing,
     device::ExecutionDevice=CPUDevice())
 
     if device isa GPUDevice && gpu_count(device) > 1
+        initial_state === nothing || error("Resuming from a saved training state is not supported in multi-GPU mode.")
         return train_multi_gpu!(model, dataset, cfg;
             callback=callback,
             epoch_callback=epoch_callback,
+            state_callback=state_callback,
+            initial_state=initial_state,
             device=device)
     end
 
     return train_single_device!(model, dataset, cfg;
         callback=callback,
         epoch_callback=epoch_callback,
+        state_callback=state_callback,
+        initial_state=initial_state,
         device=device)
 end
 
 function train_single_device!(model, dataset::NormalizedDataset, cfg::ScoreTrainerConfig;
     callback::Function,
     epoch_callback::Function,
+    state_callback::Function,
+    initial_state::Union{Nothing,TrainingState},
     device::ExecutionDevice)
     n = length(dataset)
     n == 0 && error("Dataset is empty")
-    rng = MersenneTwister(cfg.seed)
-    thread_rngs = seed_thread_rngs(cfg.seed)
+    start_epoch = initial_state === nothing ? 0 : Int(initial_state.epoch)
+    start_epoch <= cfg.epochs || error("initial_state.epoch=$(start_epoch) exceeds configured epochs=$(cfg.epochs)")
+    rng = initial_state === nothing ? MersenneTwister(cfg.seed) : copy(initial_state.rng)
+    thread_rngs = initial_state === nothing ? seed_thread_rngs(cfg.seed) : [copy(r) for r in initial_state.thread_rngs]
+    isempty(thread_rngs) && (thread_rngs = seed_thread_rngs(cfg.seed))
 
     # Ensure we are on the correct device
     if device isa GPUDevice
@@ -68,16 +91,16 @@ function train_single_device!(model, dataset::NormalizedDataset, cfg::ScoreTrain
 
     model_on_device = model
     Flux.trainmode!(model_on_device) # Ensure BatchNorm stats are updated
-    opt_state = Flux.setup(Flux.Optimisers.Adam(cfg.lr), model_on_device)
-    epoch_losses = Float32[]
-    batch_losses = Float32[]
+    opt_state = initial_state === nothing ? Flux.setup(Flux.Optimisers.Adam(cfg.lr), model_on_device) : initial_state.opt_state
+    epoch_losses = initial_state === nothing ? Float32[] : copy(initial_state.epoch_losses)
+    batch_losses = initial_state === nothing ? Float32[] : copy(initial_state.batch_losses)
     steps_per_epoch = ceil(Int, n / cfg.batch_size)
-    total_steps = cfg.epochs * steps_per_epoch
+    total_steps = max(cfg.epochs - start_epoch, 0) * steps_per_epoch
     progress = cfg.progress ? Progress(total_steps; desc="Training score network") : nothing
 
     # Setup learning rate scheduler if enabled
     lr_scheduler = cfg.use_lr_schedule ? create_lr_schedule(cfg, steps_per_epoch) : nothing
-    global_step = 0
+    global_step = initial_state === nothing ? 0 : Int(initial_state.global_step)
 
     # Gradient accumulation state
     accumulated_grads = nothing
@@ -109,7 +132,7 @@ function train_single_device!(model, dataset::NormalizedDataset, cfg::ScoreTrain
     channel_weight_cpu = reshape(channel_weights, 1, C, 1)
     channel_weight_gpu = device isa GPUDevice ? CUDA.cu(channel_weight_cpu) : nothing
 
-    for epoch in 1:cfg.epochs
+    for epoch in (start_epoch + 1):cfg.epochs
         epoch_t0 = time_ns()
 
         # Per-epoch random subset selection if epoch_subset_size > 0
@@ -199,9 +222,9 @@ function train_single_device!(model, dataset::NormalizedDataset, cfg::ScoreTrain
             loss, grads = Flux.withgradient(model_on_device) do m
                 pred = m(noisy)
                 if device isa GPUDevice
-                    mean(((pred .- noise) .^ 2) .* channel_weight_gpu) / cfg.accumulation_steps
+                    denoising_loss_with_moments(pred, noise, noisy, batch, channel_weight_gpu, cfg) / cfg.accumulation_steps
                 else
-                    mean(((pred .- noise) .^ 2) .* channel_weight_cpu) / cfg.accumulation_steps
+                    denoising_loss_with_moments(pred, noise, noisy, batch, channel_weight_cpu, cfg) / cfg.accumulation_steps
                 end
             end
 
@@ -255,6 +278,15 @@ function train_single_device!(model, dataset::NormalizedDataset, cfg::ScoreTrain
         push!(epoch_losses, accum / max(step, 1))
         epoch_time = (time_ns() - epoch_t0) / 1e9
         epoch_callback(epoch, model_on_device, epoch_time)
+        state_callback(TrainingState(
+            epoch=epoch,
+            global_step=global_step,
+            opt_state=opt_state,
+            epoch_losses=copy(epoch_losses),
+            batch_losses=copy(batch_losses),
+            rng=copy(rng),
+            thread_rngs=[copy(r) for r in thread_rngs],
+        ))
     end
     progress !== nothing && ProgressMeter.finish!(progress)
     return TrainingHistory(epoch_losses, batch_losses)
@@ -284,6 +316,43 @@ function fill_noise!(buffer, rngs::Vector{<:AbstractRNG})
     idx = clamp(threadid(), 1, length(rngs))
     randn!(rngs[idx], buffer)
     return buffer
+end
+
+@inline function xy_group_moments(batch)
+    C = size(batch, 2)
+    xvals = @view batch[:, 1, :]
+    μx = mean(xvals)
+    dx = xvals .- μx
+    varx = mean(dx .* dx)
+
+    if C >= 2
+        yvals = @view batch[:, 2:C, :]
+        μy = mean(yvals)
+        dy = yvals .- μy
+        vary = mean(dy .* dy)
+    else
+        μy = zero(μx)
+        vary = zero(varx)
+    end
+
+    return μx, μy, varx, vary
+end
+
+function denoising_loss_with_moments(pred, noise, noisy, clean_batch, channel_weight, cfg::ScoreTrainerConfig)
+    base = mean(((pred .- noise) .^ 2) .* channel_weight)
+
+    if cfg.mean_match_weight == 0f0 && cfg.cov_match_weight == 0f0
+        return base
+    end
+
+    denoised = noisy .- cfg.sigma .* pred
+    μx_pred, μy_pred, varx_pred, vary_pred = xy_group_moments(denoised)
+    μx_true, μy_true, varx_true, vary_true = xy_group_moments(clean_batch)
+
+    mean_term = (μx_pred - μx_true)^2 + (μy_pred - μy_true)^2
+    cov_term = (varx_pred - varx_true)^2 + (vary_pred - vary_true)^2
+
+    return base + cfg.mean_match_weight * mean_term + cfg.cov_match_weight * cov_term
 end
 
 function noise_like(batch, device::ExecutionDevice, rngs::Vector{<:AbstractRNG})
@@ -486,7 +555,10 @@ end
 function train_multi_gpu!(model, dataset::NormalizedDataset, cfg::ScoreTrainerConfig;
     callback::Function,
     epoch_callback::Function,
+    state_callback::Function,
+    initial_state::Union{Nothing,TrainingState},
     device::GPUDevice)
+    initial_state === nothing || error("Resuming from a saved training state is not supported in multi-GPU mode.")
     ngpus = length(device.ids)
     n = length(dataset)
     n == 0 && error("Dataset is empty")
@@ -547,6 +619,16 @@ function train_multi_gpu!(model, dataset::NormalizedDataset, cfg::ScoreTrainerCo
     transfer_buffers = Vector{Any}(undef, ngpus)
     for i in 2:ngpus
         transfer_buffers[i] = allocate_like_tree(models[1], master_dev)
+    end
+
+    channel_weights = fill(Float32(cfg.y_loss_weight), C)
+    channel_weights[1] = Float32(cfg.x_loss_weight)
+    channel_weights ./= mean(channel_weights)
+    channel_weight_cpu = reshape(channel_weights, 1, C, 1)
+    channel_weight_gpu = Vector{Any}(undef, ngpus)
+    for i in 1:ngpus
+        CUDA.device!(device.ids[i])
+        channel_weight_gpu[i] = CUDA.cu(channel_weight_cpu)
     end
 
     for epoch in 1:cfg.epochs
@@ -624,7 +706,7 @@ function train_multi_gpu!(model, dataset::NormalizedDataset, cfg::ScoreTrainerCo
                 # We scale loss by 1/ngpus to average across devices
                 loss, grads = Flux.withgradient(models[i]) do m
                     pred = m(noisy)
-                    mse(pred, noise) / ngpus
+                    denoising_loss_with_moments(pred, noise, noisy, batch_gpu, channel_weight_gpu[i], cfg) / ngpus
                 end
 
                 grads_vector[i] = grads[1]

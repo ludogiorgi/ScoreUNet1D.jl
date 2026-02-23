@@ -12,7 +12,7 @@ observations_root = "scripts/L96/observations"
 dataset_filename = "l96_timeseries.hdf5"
 integration_params_filename = "integration_params.toml"
 dataset_key = "timeseries"
-normalization_mode = "split_xy"
+normalization_mode = "per_channel" # "split_xy" or "per_channel"
 generate_if_missing = true
 
 [data.generation]
@@ -22,62 +22,121 @@ h = 1.0
 c = 10.0
 b = 10.0
 dt = 0.005
+# spinup_steps = 20_000
 spinup_steps = 20_000
-save_every = 20
-nsamples = 200_000
-process_noise_sigma = 0.03
+# save_every = 100
+save_every = 200
+# nsamples = 10_000_000
+nsamples = 1_000_000
+process_noise_sigma = 0.05
+stochastic_x_noise = false
 rng_seed = 7
 
 [train]
 device = "GPU:0"
+# num_training_epochs = 45
 num_training_epochs = 20
+# batch_size = 128
 batch_size = 128
 lr = 8e-4
 sigma = 0.1
+# base_channels = 32
 base_channels = 32
+# channel_multipliers = [1, 2]
 channel_multipliers = [1, 2]
 model_arch = "schneider_dualstream"
 progress = false
-use_lr_schedule = true
-warmup_steps = 500
+# use_lr_schedule = true
+use_lr_schedule = false
+# warmup_steps = 500
+warmup_steps = 0
 min_lr_factor = 0.1
 norm_type = "batch"
 norm_groups = 0
 
 [train.loss]
 x_weight = 1.0
-y_weight = 1.0
+y_weight = 20.0
+mean_weight = 0.0
+cov_weight = 0.0
 
 [train.ema]
 enabled = true
 decay = 0.999
 use_for_eval = true
 
+[train.resume]
+enabled = false
+source_run_dir = ""
+state_path = ""
+
 [train.kl_eval]
-enabled = true
-kl_eval_interval_epochs = 10
+enabled = false
+# kl_eval_interval_epochs = 15
+kl_eval_interval_epochs = 4
 
 [langevin]
-device = "GPU:0"
+# device = "GPU:0"
+device = "GPU:1"
+# dt = 0.0025
 dt = 0.0025
+# resolution = 40
 resolution = 40
-nsteps = 400_000
-burn_in = 40_000
+# nsteps = 400_000
+nsteps = 40_000
+# burn_in = 40_000
+burn_in = 4_000
+# ensembles = 64
 ensembles = 64
-pdf_bins = 60
+# pdf_bins = 60
+pdf_bins = 50
 use_boundary = true
 boundary_min = -8.0
 boundary_max = 8.0
-min_kept_snapshots_warn = 800
+# min_kept_snapshots_warn = 800
+min_kept_snapshots_warn = 50
 progress = false
+# eval_profile = "full"
 eval_profile = "full"
 
 [langevin.quick]
 dt = 0.0025
-resolution = 40
-nsteps = 8_000
-burn_in = 2_000
-ensembles = 32
+# resolution = 40
+resolution = 20
+# nsteps = 8_000
+nsteps = 1_200
+# burn_in = 2_000
+burn_in = 300
+# ensembles = 32
+ensembles = 8
+
+[responses]
+enabled = false
+params_path = "scripts/L96/parameters_responses.toml"
+methods_override = ""
+score_device = ""
+run_prefix = "run_"
+dataset_attr_sync_mode = "override"
+save_every_override = 0
+history_min_alpha = 0.2
+gfdt_nsamples_override = 0
+numerical_ensembles_override = 0
+plot_gaussian = true
+plot_numerical = true
+
+[responses.reference]
+cache_root = "scripts/L96/reference_responses_cache"
+force_regenerate = false
+gfdt_nsamples = 200000
+gfdt_start_index = 50001
+numerical_ensembles = 16384
+numerical_start_index = 80001
+numerical_method = "tangent"
+h_rel = 0.005
+h_abs = [0.01, 0.001, 0.01, 0.01]
+numerical_seed_base = 1920000
+tmax = 2.0
+mean_center = true
 
 [figures]
 dpi = 110
@@ -85,5 +144,6 @@ style = "publication"
 
 [output]
 save_checkpoints = true
-checkpoint_every = 10
-save_per_epoch_eval = true
+# checkpoint_every = 10
+checkpoint_every = 4
+save_per_epoch_eval = false
