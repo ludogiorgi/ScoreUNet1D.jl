@@ -1,0 +1,65 @@
+[methods]
+unet = true
+numerical = true
+apply_score_correction = true
+gaussian = true
+response_kind = "heaviside"
+
+[gfdt]
+nsamples = 60000
+batch_size = 1024
+output_points = 301
+divergence_mode = "hutchinson"
+divergence_eps = 0.03
+fit_beta_samples = 50000
+response_tmax = 2.0
+mean_center = true
+score_forward_mode = "test"
+divergence_probes = 2
+start_index = 30001
+score_device = "CPU"
+
+[numerical]
+h_abs = [0.05, 0.02, 0.01, 0.002, 0.01]
+h_rel = 0.005
+seed_base = 1900000
+ensembles = 2048
+start_index = 120001
+
+[cache]
+force_regenerate = false
+
+[integration]
+c = 10.0
+nsamples = 260000
+b = 10.0
+dt = 0.005
+h = 1.0
+stochastic_x_noise = false
+spinup_steps = 60000
+process_noise_sigma = 0.0
+rng_seed = 777
+J = 32
+save_every = 2
+K = 8
+F = 20.0
+
+[paths]
+dataset_path = "scripts/arnold/data/l96_x_responses.hdf5"
+cache_root = "/home/ludogio/Documents/JuliaProjects/ScoreUNet1D.jl/scripts/arnold/runs/run_003/cache/responses"
+dataset_key = "x_timeseries"
+checkpoint_path = ""
+output_root = "/home/ludogio/Documents/JuliaProjects/ScoreUNet1D.jl/scripts/arnold/runs/run_003/figures/responses"
+
+[closure]
+sigma = 1.0
+auto_fit = true
+alpha2 = 0.0
+alpha1 = 0.0
+alpha3 = 0.0
+beta_tail = -2.0
+alpha0 = 0.0
+F = 20.0
+
+[figures]
+dpi = 180

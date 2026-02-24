@@ -1,0 +1,35 @@
+[paths]
+data_params = "scripts/arnold/parameters_data.toml"
+# In pipeline mode this is overridden by --checkpoint.
+model_path = ""
+# In pipeline mode this is overridden by --output-dir.
+output_dir = "scripts/arnold/output/langevin"
+# In pipeline mode this is overridden by --metrics-path.
+metrics_path = "scripts/arnold/output/langevin/metrics.txt"
+
+[data]
+observations_role = "train_stochastic"
+
+[langevin]
+device = "GPU:1"
+dt = 0.0025
+resolution = 20
+nsteps = 12000
+burn_in = 2000
+ensembles = 64
+seed = 21
+progress = false
+use_boundary = true
+boundary_min = -12.0
+boundary_max = 12.0
+pdf_bins = 90
+
+[metrics]
+kl_low_q = 0.001
+kl_high_q = 0.999
+target_avg_mode_kl = 0.01
+max_acf_lag = 220
+
+[figures]
+dpi = 180
+

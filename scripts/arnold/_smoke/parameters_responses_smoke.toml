@@ -1,0 +1,65 @@
+[paths]
+dataset_path = "scripts/arnold/_smoke/l96_x_responses_smoke.hdf5"
+dataset_key = "x_timeseries"
+checkpoint_path = ""
+output_root = "scripts/arnold/_smoke/responses"
+cache_root = "scripts/arnold/_smoke/cache_responses"
+
+[integration]
+K = 8
+J = 32
+F = 20.0
+h = 1.0
+c = 10.0
+b = 10.0
+dt = 0.005
+spinup_steps = 2000
+save_every = 2
+nsamples = 9000
+rng_seed = 99
+process_noise_sigma = 0.0
+stochastic_x_noise = false
+
+[closure]
+F = 20.0
+alpha0 = 0.0
+alpha1 = 0.0
+alpha2 = 0.0
+alpha3 = 0.0
+sigma = 1.0
+beta_tail = -2.0
+auto_fit = true
+
+[methods]
+gaussian = true
+unet = true
+numerical = true
+apply_score_correction = true
+response_kind = "heaviside"
+
+[gfdt]
+nsamples = 2500
+start_index = 1000
+mean_center = true
+batch_size = 256
+score_device = "CPU"
+score_forward_mode = "test"
+response_tmax = 1.0
+output_points = 101
+divergence_mode = "hutchinson"
+divergence_eps = 0.03
+divergence_probes = 1
+fit_beta_samples = 2000
+
+[numerical]
+ensembles = 64
+start_index = 2000
+h_rel = 0.01
+h_abs = [0.05, 0.02, 0.01, 0.005, 0.01]
+seed_base = 1002000
+
+[figures]
+dpi = 120
+
+[cache]
+force_regenerate = true

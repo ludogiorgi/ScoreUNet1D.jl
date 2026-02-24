@@ -1,0 +1,31 @@
+[paths]
+model_path = ""
+output_dir = "scripts/arnold/_smoke/langevin"
+metrics_path = "scripts/arnold/_smoke/langevin/metrics.txt"
+
+[data]
+observations_path = "scripts/arnold/_smoke/l96_x_train_smoke.hdf5"
+dataset_key = "x_timeseries"
+
+[langevin]
+device = "GPU:1"
+dt = 0.0025
+resolution = 8
+nsteps = 2500
+burn_in = 300
+ensembles = 32
+seed = 11
+progress = false
+use_boundary = true
+boundary_min = -12.0
+boundary_max = 12.0
+pdf_bins = 48
+
+[metrics]
+kl_low_q = 0.001
+kl_high_q = 0.999
+target_avg_mode_kl = 0.05
+max_acf_lag = 80
+
+[figures]
+dpi = 120

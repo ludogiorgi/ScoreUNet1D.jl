@@ -1,0 +1,31 @@
+[metrics]
+kl_low_q = 0.001
+max_acf_lag = 220
+kl_high_q = 0.999
+target_avg_mode_kl = 0.01
+
+[langevin]
+burn_in = 10000
+dt = 0.0025
+boundary_max = 12.0
+device = "GPU:1"
+progress = false
+ensembles = 256
+resolution = 25
+nsteps = 60000
+use_boundary = true
+pdf_bins = 90
+boundary_min = -12.0
+seed = 21
+
+[paths]
+model_path = ""
+metrics_path = "scripts/arnold/output/langevin/metrics.txt"
+output_dir = "scripts/arnold/output/langevin"
+
+[data]
+observations_path = "scripts/arnold/data/l96_x_train.hdf5"
+dataset_key = "x_timeseries"
+
+[figures]
+dpi = 180

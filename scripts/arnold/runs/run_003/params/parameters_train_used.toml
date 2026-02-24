@@ -1,0 +1,47 @@
+[paths]
+dataset_path = "scripts/arnold/data/l96_x_train.hdf5"
+dataset_key = "x_timeseries"
+
+[data]
+c = 10.0
+nsamples = 100000
+b = 10.0
+dt = 0.005
+h = 1.0
+stochastic_x_noise = false
+spinup_steps = 20000
+process_noise_sigma = 0.0
+rng_seed = 11
+J = 32
+save_every = 40
+target_spacing = 1.0
+K = 8
+F = 20.0
+
+[train]
+lr = 0.0008
+use_lr_schedule = true
+min_lr_factor = 0.1
+loss_y_weight = 1.0
+resume_enabled = false
+batch_size = 512
+ema_enabled = true
+loss_mean_weight = 0.0
+sigma = 0.05
+device = "GPU:0"
+normalization_mode = "per_channel"
+progress = false
+norm_type = "group"
+loss_cov_weight = 0.0
+norm_groups = 8
+base_channels = 64
+ema_use_for_eval = true
+save_state_every = 30
+epochs = 180
+channel_multipliers = [1, 2]
+loss_x_weight = 1.0
+checkpoint_every = 30
+resume_state_path = ""
+seed = 42
+ema_decay = 0.999
+warmup_steps = 500

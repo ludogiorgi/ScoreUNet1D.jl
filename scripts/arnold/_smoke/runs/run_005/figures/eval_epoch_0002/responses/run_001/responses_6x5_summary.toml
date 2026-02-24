@@ -1,0 +1,57 @@
+cache_regenerated = true
+output_dir = "/home/ludogio/Documents/JuliaProjects/ScoreUNet1D.jl/scripts/arnold/_smoke/runs/run_005/figures/eval_epoch_0002/responses/run_001"
+response_kind = "heaviside"
+run_id = "run_001"
+checkpoint_path = "/home/ludogio/Documents/JuliaProjects/ScoreUNet1D.jl/scripts/arnold/_smoke/runs/run_005/model/checkpoints/epoch_0002.bson"
+apply_score_correction = true
+h_used = [0.05, 0.02, 0.01, 0.01, 0.01]
+cache_path = "/home/ludogio/Documents/JuliaProjects/ScoreUNet1D.jl/scripts/arnold/_smoke/runs/run_005/cache/responses/baseline_74323967a1b1fdde741331285355260a16bd8a23.hdf5"
+
+[figures]
+raw = "/home/ludogio/Documents/JuliaProjects/ScoreUNet1D.jl/scripts/arnold/_smoke/runs/run_005/figures/eval_epoch_0002/responses/run_001/responses_6x5_selected_methods_raw.png"
+main = "/home/ludogio/Documents/JuliaProjects/ScoreUNet1D.jl/scripts/arnold/_smoke/runs/run_005/figures/eval_epoch_0002/responses/run_001/responses_6x5_selected_methods.png"
+corrected = "/home/ludogio/Documents/JuliaProjects/ScoreUNet1D.jl/scripts/arnold/_smoke/runs/run_005/figures/eval_epoch_0002/responses/run_001/responses_6x5_selected_methods_corrected.png"
+
+[outputs]
+responses_csv = "/home/ludogio/Documents/JuliaProjects/ScoreUNet1D.jl/scripts/arnold/_smoke/runs/run_005/figures/eval_epoch_0002/responses/run_001/responses_6x5_selected_methods.csv"
+responses_hdf5 = "/home/ludogio/Documents/JuliaProjects/ScoreUNet1D.jl/scripts/arnold/_smoke/runs/run_005/figures/eval_epoch_0002/responses/run_001/responses_6x5_selected_methods.hdf5"
+parameters_used = "/home/ludogio/Documents/JuliaProjects/ScoreUNet1D.jl/scripts/arnold/_smoke/runs/run_005/figures/eval_epoch_0002/responses/run_001/parameters_used.toml"
+
+[rmse.numerics_vs_unet_corrected]
+overall = 277090.6848729313
+
+    [rmse.numerics_vs_unet_corrected.per_param]
+    sigma = 127.89710156938577
+    alpha2 = 42121.368209201624
+    alpha1 = 3415.5535404966113
+    alpha3 = 946307.9560957283
+    alpha0 = 252.68400233740985
+
+[rmse.numerics_vs_gaussian]
+overall = 277869.75402279047
+
+    [rmse.numerics_vs_gaussian.per_param]
+    sigma = 131.23116133575007
+    alpha2 = 31657.62045608176
+    alpha1 = 2792.0859238651233
+    alpha3 = 950078.3336367363
+    alpha0 = 229.2008774578568
+
+[rmse.numerics_vs_unet_raw]
+overall = 277090.6846945206
+
+    [rmse.numerics_vs_unet_raw.per_param]
+    sigma = 126.1955168482383
+    alpha2 = 42121.368209201624
+    alpha1 = 3415.5535404966113
+    alpha3 = 946307.9560957283
+    alpha0 = 252.68400233740985
+
+[closure_parameters_used]
+sigma = 0.22619425673555554
+alpha2 = 0.003993834134724414
+alpha1 = 1.1049128352060058
+alpha3 = -0.0034483816001101785
+beta_tail = -2.0
+alpha0 = 0.7434561359992485
+F = 20.0

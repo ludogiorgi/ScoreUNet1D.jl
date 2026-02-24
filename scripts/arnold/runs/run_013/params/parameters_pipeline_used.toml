@@ -1,0 +1,27 @@
+[run]
+runs_root = "scripts/arnold/runs"
+run_id_padding = 3
+
+[paths]
+train_params = "scripts/arnold/parameters_train.toml"
+langevin_params = "scripts/arnold/parameters_langevin.toml"
+responses_params = "scripts/arnold/parameters_responses.toml"
+
+[resources]
+train_device = "GPU:0"
+langevin_device = "GPU:1"
+responses_score_device = "CPU"
+responses_threads = "auto"
+checkpoint_poll_seconds = 2.0
+queue_poll_seconds = 1.0
+
+[evaluation]
+run_langevin = true
+run_responses = true
+evaluate_every_checkpoint = true
+evaluate_final_model = true
+response_apply_correction = true
+response_kind = "heaviside"
+
+[targets]
+target_avg_mode_kl = 0.01

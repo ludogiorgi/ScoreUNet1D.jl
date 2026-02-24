@@ -1,0 +1,33 @@
+[paths]
+data_params = "/home/ludogio/Documents/JuliaProjects/ScoreUNet1D.jl/scripts/arnold/runs/run_021/params/parameters_data_used.toml"
+
+[data]
+target_spacing = 1.0
+dataset_role = "train_stochastic"
+
+[train]
+lr = 0.0008
+use_lr_schedule = true
+min_lr_factor = 0.1
+resume_enabled = false
+batch_size = 128
+ema_enabled = true
+loss_mean_weight = 0.0
+sigma = 0.05
+device = "GPU:0"
+normalization_mode = "per_channel"
+progress = false
+norm_type = "group"
+loss_cov_weight = 0.0
+norm_groups = 8
+base_channels = 32
+ema_use_for_eval = true
+save_state_every = 60
+epochs = 180
+channel_multipliers = [1, 2]
+checkpoint_every = 60
+resume_state_path = ""
+seed = 42
+ema_decay = 0.999
+loss_weight = 1.0
+warmup_steps = 500

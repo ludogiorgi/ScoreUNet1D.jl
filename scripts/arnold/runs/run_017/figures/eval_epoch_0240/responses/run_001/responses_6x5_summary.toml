@@ -1,0 +1,77 @@
+cache_regenerated = true
+output_dir = "/home/ludogio/Documents/JuliaProjects/ScoreUNet1D.jl/scripts/arnold/runs/run_017/figures/eval_epoch_0240/responses/run_001"
+response_kind = "heaviside"
+run_id = "run_001"
+checkpoint_path = "/home/ludogio/Documents/JuliaProjects/ScoreUNet1D.jl/scripts/arnold/runs/run_017/model/checkpoints/epoch_0240.bson"
+apply_score_correction = true
+h_used = [0.05, 0.02, 0.01, 0.005, 0.05]
+cache_path = "/home/ludogio/Documents/JuliaProjects/ScoreUNet1D.jl/scripts/arnold/runs/run_017/cache/responses/baseline_b5e0f9d9387401d409fa9aef8a17a5bcdb71bb24.hdf5"
+
+[numerical_diag]
+valid_fraction = [1.0, 1.0, 1.0, 1.0, 1.0]
+valid_counts = [60000, 60000, 60000, 60000, 60000]
+h_attempts = [1, 1, 1, 1, 1]
+
+[observable_reference]
+F_ref = 20.0
+alpha3_ref = 0.00235
+alpha1_ref = 1.3
+alpha0_ref = 0.341
+alpha2_ref = -0.0136
+
+[figures]
+raw = "/home/ludogio/Documents/JuliaProjects/ScoreUNet1D.jl/scripts/arnold/runs/run_017/figures/eval_epoch_0240/responses/run_001/responses_6x5_selected_methods_raw.png"
+main = "/home/ludogio/Documents/JuliaProjects/ScoreUNet1D.jl/scripts/arnold/runs/run_017/figures/eval_epoch_0240/responses/run_001/responses_6x5_selected_methods.png"
+corrected = "/home/ludogio/Documents/JuliaProjects/ScoreUNet1D.jl/scripts/arnold/runs/run_017/figures/eval_epoch_0240/responses/run_001/responses_6x5_selected_methods_corrected.png"
+
+[outputs]
+responses_csv = "/home/ludogio/Documents/JuliaProjects/ScoreUNet1D.jl/scripts/arnold/runs/run_017/figures/eval_epoch_0240/responses/run_001/responses_6x5_selected_methods.csv"
+responses_hdf5 = "/home/ludogio/Documents/JuliaProjects/ScoreUNet1D.jl/scripts/arnold/runs/run_017/figures/eval_epoch_0240/responses/run_001/responses_6x5_selected_methods.hdf5"
+parameters_used = "/home/ludogio/Documents/JuliaProjects/ScoreUNet1D.jl/scripts/arnold/runs/run_017/figures/eval_epoch_0240/responses/run_001/parameters_used.toml"
+
+[rmse.numerics_vs_unet_corrected]
+overall = 161.0218707394555
+
+    [rmse.numerics_vs_unet_corrected.per_param]
+    sigma = 1.151639998906873
+    alpha2 = 9.195474284780554
+    alpha1 = 1.4028312491480024
+    alpha3 = 359.93379557576577
+    alpha0 = 0.16163870165110997
+
+[rmse.numerics_vs_gaussian]
+overall = 522.0245255250788
+
+    [rmse.numerics_vs_gaussian.per_param]
+    sigma = 0.38485461317042985
+    alpha2 = 99.362501712569
+    alpha1 = 11.850372490003524
+    alpha3 = 1162.9844131926545
+    alpha0 = 1.339675911145834
+
+[rmse.numerics_vs_unet_raw]
+overall = 298.72908866499034
+
+    [rmse.numerics_vs_unet_raw.per_param]
+    sigma = 0.43465823295642164
+    alpha2 = 44.56361806728009
+    alpha1 = 5.391911539624428
+    alpha3 = 666.4680583855447
+    alpha0 = 0.7010932915985277
+
+[closure_meta]
+theta_initial = [0.341, 1.3, -0.0136, 0.00235, 0.467]
+theta_used = [0.341, 1.3, -0.0136, 0.00235, 0.467]
+mode = "initial_only"
+fit_start_index = 0
+fit_dataset_role = ""
+fit_samples = 0
+
+[closure_parameters_used]
+sigma = 0.467
+auto_fit = false
+alpha2 = -0.0136
+alpha1 = 1.3
+alpha3 = 0.00235
+alpha0 = 0.341
+F = 20.0

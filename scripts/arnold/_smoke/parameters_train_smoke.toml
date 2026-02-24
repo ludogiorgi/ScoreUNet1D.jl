@@ -1,0 +1,47 @@
+[paths]
+dataset_path = "scripts/arnold/_smoke/l96_x_train_smoke.hdf5"
+dataset_key = "x_timeseries"
+
+[data]
+K = 8
+J = 32
+F = 20.0
+h = 1.0
+c = 10.0
+b = 10.0
+dt = 0.005
+spinup_steps = 2000
+save_every = 50
+nsamples = 5000
+rng_seed = 101
+process_noise_sigma = 0.0
+stochastic_x_noise = false
+target_spacing = 0.25
+
+[train]
+device = "GPU:0"
+seed = 3
+epochs = 2
+batch_size = 128
+lr = 0.001
+sigma = 0.05
+base_channels = 16
+channel_multipliers = [1, 2]
+norm_type = "group"
+norm_groups = 4
+normalization_mode = "per_channel"
+progress = false
+use_lr_schedule = false
+warmup_steps = 0
+min_lr_factor = 0.1
+ema_enabled = true
+ema_decay = 0.999
+ema_use_for_eval = true
+checkpoint_every = 1
+save_state_every = 1
+resume_enabled = false
+resume_state_path = ""
+loss_x_weight = 1.0
+loss_y_weight = 1.0
+loss_mean_weight = 0.0
+loss_cov_weight = 0.0

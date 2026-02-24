@@ -1,0 +1,32 @@
+roles_requested = ["train_stochastic", "gfdt_stochastic"]
+parameters_data_path = "/home/ludogio/Documents/JuliaProjects/ScoreUNet1D.jl/scripts/arnold/parameters_data.toml"
+datasets_hdf5 = "/home/ludogio/Documents/JuliaProjects/ScoreUNet1D.jl/scripts/arnold/data/l96_arnold_datasets.hdf5"
+
+[closure_used]
+sigma = 0.467
+alpha2 = -0.0136
+alpha1 = 1.3
+alpha3 = 0.00235
+alpha0 = 0.341
+
+[closure_meta]
+theta_initial = [0.341, 1.3, -0.0136, 0.00235, 0.467]
+theta_used = [0.341, 1.3, -0.0136, 0.00235, 0.467]
+mode = "initial_only"
+fit_start_index = 0
+fit_dataset_role = ""
+fit_samples = 0
+
+[datasets.gfdt_stochastic]
+key = "x_gfdt_stochastic"
+role = "gfdt_stochastic"
+signature = "7e3817026b1ccd54052f7cdfe69c65cd900c48f2"
+generated = true
+path = "/home/ludogio/Documents/JuliaProjects/ScoreUNet1D.jl/scripts/arnold/data/l96_arnold_datasets.hdf5"
+
+[datasets.train_stochastic]
+key = "x_train_stochastic"
+role = "train_stochastic"
+signature = "2d37e959aa1604356686e16d9edcb6da54d40237"
+generated = true
+path = "/home/ludogio/Documents/JuliaProjects/ScoreUNet1D.jl/scripts/arnold/data/l96_arnold_datasets.hdf5"
