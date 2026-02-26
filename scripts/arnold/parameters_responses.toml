@@ -1,7 +1,7 @@
 [methods]
 unet = true
 numerical = true
-apply_score_correction = true
+apply_score_correction = false
 gaussian = true
 response_kind = "heaviside"
 
@@ -11,7 +11,7 @@ batch_size = 1024
 output_points = 201
 divergence_mode = "hutchinson"
 divergence_eps = 0.03
-response_tmax = 5.0
+response_tmax = 2.0
 mean_center = true
 score_forward_mode = "test"
 divergence_probes = 10
@@ -27,10 +27,11 @@ max_abs_state = 80.0
 h_shrink_factor = 0.5
 ensembles = 60000
 max_h_shrinks = 6
+thread_chunk_size = 256
 start_index = 10001
 
 [cache]
-force_regenerate = true
+force_regenerate = false
 
 [paths]
 data_params = "scripts/arnold/parameters_data.toml"

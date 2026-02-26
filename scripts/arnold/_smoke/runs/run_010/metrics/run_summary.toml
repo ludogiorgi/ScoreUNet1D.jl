@@ -1,0 +1,56 @@
+run_dir = "/home/ludogio/Documents/JuliaProjects/ScoreUNet1D.jl/scripts/arnold/_smoke/runs/run_010"
+updated_at = "2026-02-24T18:52:44"
+
+[evaluation]
+epochs = [1, 2]
+best_epoch = 2
+best_avg_mode_kl_clipped = 0.17269323840431913
+avg_mode_kl_clipped = [0.961371242508451, 0.17269323840431913]
+target_avg_mode_kl = 0.05
+num_evaluations = 2
+smape_unet_vs_numerical = [nan, nan]
+best_metrics_toml = "/home/ludogio/Documents/JuliaProjects/ScoreUNet1D.jl/scripts/arnold/_smoke/runs/run_010/metrics/epoch_0002_metrics.toml"
+
+    [[evaluation.details]]
+    fig_dir = "/home/ludogio/Documents/JuliaProjects/ScoreUNet1D.jl/scripts/arnold/_smoke/runs/run_010/figures/eval_epoch_0001"
+    global_kl = 0.36081795273743683
+    epoch = 1
+    response_summary = ""
+    avg_mode_kl_clipped = 0.961371242508451
+    smape_unet_vs_numerical = nan
+    figure_B = "/home/ludogio/Documents/JuliaProjects/ScoreUNet1D.jl/scripts/arnold/_smoke/runs/run_010/figures/eval_epoch_0001/figB_stats_4x2.png"
+    tag = "eval_epoch_0001"
+    response_run_dir = ""
+    figure_D = ""
+    checkpoint_path = "/home/ludogio/Documents/JuliaProjects/ScoreUNet1D.jl/scripts/arnold/_smoke/runs/run_010/model/checkpoints/epoch_0001.bson"
+    figure_C = "/home/ludogio/Documents/JuliaProjects/ScoreUNet1D.jl/scripts/arnold/_smoke/runs/run_010/figures/eval_epoch_0001/figC_dynamics_2x2.png"
+    metrics_toml = "/home/ludogio/Documents/JuliaProjects/ScoreUNet1D.jl/scripts/arnold/_smoke/runs/run_010/metrics/epoch_0001_metrics.toml"
+    [[evaluation.details]]
+    fig_dir = "/home/ludogio/Documents/JuliaProjects/ScoreUNet1D.jl/scripts/arnold/_smoke/runs/run_010/figures/eval_epoch_0002"
+    global_kl = 0.031451076748650074
+    epoch = 2
+    response_summary = ""
+    avg_mode_kl_clipped = 0.17269323840431913
+    smape_unet_vs_numerical = nan
+    figure_B = "/home/ludogio/Documents/JuliaProjects/ScoreUNet1D.jl/scripts/arnold/_smoke/runs/run_010/figures/eval_epoch_0002/figB_stats_4x2.png"
+    tag = "eval_epoch_0002"
+    response_run_dir = ""
+    figure_D = ""
+    checkpoint_path = "/home/ludogio/Documents/JuliaProjects/ScoreUNet1D.jl/scripts/arnold/_smoke/runs/run_010/model/checkpoints/epoch_0002.bson"
+    figure_C = "/home/ludogio/Documents/JuliaProjects/ScoreUNet1D.jl/scripts/arnold/_smoke/runs/run_010/figures/eval_epoch_0002/figC_dynamics_2x2.png"
+    metrics_toml = "/home/ludogio/Documents/JuliaProjects/ScoreUNet1D.jl/scripts/arnold/_smoke/runs/run_010/metrics/epoch_0002_metrics.toml"
+
+[parameters_used]
+langevin = "/home/ludogio/Documents/JuliaProjects/ScoreUNet1D.jl/scripts/arnold/_smoke/runs/run_010/params/parameters_langevin_used.toml"
+responses = "/home/ludogio/Documents/JuliaProjects/ScoreUNet1D.jl/scripts/arnold/_smoke/runs/run_010/params/parameters_responses_used.toml"
+train = "/home/ludogio/Documents/JuliaProjects/ScoreUNet1D.jl/scripts/arnold/_smoke/runs/run_010/params/parameters_train_used.toml"
+pipeline = "/home/ludogio/Documents/JuliaProjects/ScoreUNet1D.jl/scripts/arnold/_smoke/runs/run_010/params/parameters_pipeline_used.toml"
+
+[training]
+epochs = 2
+model_path = "/home/ludogio/Documents/JuliaProjects/ScoreUNet1D.jl/scripts/arnold/_smoke/runs/run_010/model/score_model.bson"
+figure_A = "/home/ludogio/Documents/JuliaProjects/ScoreUNet1D.jl/scripts/arnold/_smoke/runs/run_010/figures/training/figA_training_3panels.png"
+training_metrics_csv = "/home/ludogio/Documents/JuliaProjects/ScoreUNet1D.jl/scripts/arnold/_smoke/runs/run_010/figures/training/training_metrics.csv"
+checkpoint_every = 1
+state_path = "/home/ludogio/Documents/JuliaProjects/ScoreUNet1D.jl/scripts/arnold/_smoke/runs/run_010/model/training_state_latest.bson"
+checkpoint_dir = "/home/ludogio/Documents/JuliaProjects/ScoreUNet1D.jl/scripts/arnold/_smoke/runs/run_010/model/checkpoints"

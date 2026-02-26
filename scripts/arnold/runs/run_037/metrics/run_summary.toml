@@ -1,0 +1,179 @@
+run_dir = "/home/ludogio/Documents/JuliaProjects/ScoreUNet1D.jl/scripts/arnold/runs/run_037"
+updated_at = "2026-02-25T23:38:56"
+
+[evaluation]
+epochs = [10, 20, 30, 40, 50, 60, 70, 80, 90, 100]
+smape_gaussian_vs_numerical = [0.4991739729434434, 0.4991739729434434, 0.4991739729434434, 0.4991739729434434, 0.4991739729434434, 0.4991739729434434, 0.4991739729434434, 0.4991739729434434, 0.4991739729434434, 0.4991739729434434]
+best_epoch = 70
+best_avg_mode_kl_clipped = 0.002760269293968767
+avg_mode_kl_clipped = [0.007781884014646714, 0.00314422119924085, 0.004713590154761874, 0.007083252527917219, 0.005463834533434047, 0.003610638928289005, 0.002760269293968767, 0.0033976268686859118, 0.0029536473461681586, 0.004321542524502867]
+target_avg_mode_kl = 0.01
+num_evaluations = 10
+smape_unet_vs_numerical = [0.46049379896979276, 0.4756380873521649, 0.32830143589890476, 0.3844754634734096, 0.4114215488845771, 0.4168159344643664, 0.4081066781026676, 0.3876588960726671, 0.41383969102976875, 0.38851044105110494]
+best_metrics_toml = "/home/ludogio/Documents/JuliaProjects/ScoreUNet1D.jl/scripts/arnold/runs/run_037/metrics/epoch_0070_metrics.toml"
+
+    [[evaluation.details]]
+    fig_dir = "/home/ludogio/Documents/JuliaProjects/ScoreUNet1D.jl/scripts/arnold/runs/run_037/figures/eval_epoch_0010"
+    global_kl = 0.005027597524611329
+    epoch = 10
+    response_summary = "/home/ludogio/Documents/JuliaProjects/ScoreUNet1D.jl/scripts/arnold/runs/run_037/figures/eval_epoch_0010/responses/run_001/responses_5x5_summary.toml"
+    avg_mode_kl_clipped = 0.007781884014646714
+    smape_unet_vs_numerical = 0.46049379896979276
+    figure_B = "/home/ludogio/Documents/JuliaProjects/ScoreUNet1D.jl/scripts/arnold/runs/run_037/figures/eval_epoch_0010/figB_stats_4x2.png"
+    tag = "eval_epoch_0010"
+    smape_gaussian_vs_numerical = 0.4991739729434434
+    figure_D = "/home/ludogio/Documents/JuliaProjects/ScoreUNet1D.jl/scripts/arnold/runs/run_037/figures/eval_epoch_0010/figD_responses_5x5.png"
+    response_run_dir = "/home/ludogio/Documents/JuliaProjects/ScoreUNet1D.jl/scripts/arnold/runs/run_037/figures/eval_epoch_0010/responses/run_001"
+    checkpoint_path = "/home/ludogio/Documents/JuliaProjects/ScoreUNet1D.jl/scripts/arnold/runs/run_037/model/checkpoints/epoch_0010.bson"
+    figure_C = "/home/ludogio/Documents/JuliaProjects/ScoreUNet1D.jl/scripts/arnold/runs/run_037/figures/eval_epoch_0010/figC_dynamics_2x2.png"
+    metrics_toml = "/home/ludogio/Documents/JuliaProjects/ScoreUNet1D.jl/scripts/arnold/runs/run_037/metrics/epoch_0010_metrics.toml"
+    [[evaluation.details]]
+    fig_dir = "/home/ludogio/Documents/JuliaProjects/ScoreUNet1D.jl/scripts/arnold/runs/run_037/figures/eval_epoch_0020"
+    global_kl = 0.0005818500282868371
+    epoch = 20
+    response_summary = "/home/ludogio/Documents/JuliaProjects/ScoreUNet1D.jl/scripts/arnold/runs/run_037/figures/eval_epoch_0020/responses/run_001/responses_5x5_summary.toml"
+    avg_mode_kl_clipped = 0.00314422119924085
+    smape_unet_vs_numerical = 0.4756380873521649
+    figure_B = "/home/ludogio/Documents/JuliaProjects/ScoreUNet1D.jl/scripts/arnold/runs/run_037/figures/eval_epoch_0020/figB_stats_4x2.png"
+    tag = "eval_epoch_0020"
+    smape_gaussian_vs_numerical = 0.4991739729434434
+    figure_D = "/home/ludogio/Documents/JuliaProjects/ScoreUNet1D.jl/scripts/arnold/runs/run_037/figures/eval_epoch_0020/figD_responses_5x5.png"
+    response_run_dir = "/home/ludogio/Documents/JuliaProjects/ScoreUNet1D.jl/scripts/arnold/runs/run_037/figures/eval_epoch_0020/responses/run_001"
+    checkpoint_path = "/home/ludogio/Documents/JuliaProjects/ScoreUNet1D.jl/scripts/arnold/runs/run_037/model/checkpoints/epoch_0020.bson"
+    figure_C = "/home/ludogio/Documents/JuliaProjects/ScoreUNet1D.jl/scripts/arnold/runs/run_037/figures/eval_epoch_0020/figC_dynamics_2x2.png"
+    metrics_toml = "/home/ludogio/Documents/JuliaProjects/ScoreUNet1D.jl/scripts/arnold/runs/run_037/metrics/epoch_0020_metrics.toml"
+    [[evaluation.details]]
+    fig_dir = "/home/ludogio/Documents/JuliaProjects/ScoreUNet1D.jl/scripts/arnold/runs/run_037/figures/eval_epoch_0030"
+    global_kl = 0.00174049804858801
+    epoch = 30
+    response_summary = "/home/ludogio/Documents/JuliaProjects/ScoreUNet1D.jl/scripts/arnold/runs/run_037/figures/eval_epoch_0030/responses/run_001/responses_5x5_summary.toml"
+    avg_mode_kl_clipped = 0.004713590154761874
+    smape_unet_vs_numerical = 0.32830143589890476
+    figure_B = "/home/ludogio/Documents/JuliaProjects/ScoreUNet1D.jl/scripts/arnold/runs/run_037/figures/eval_epoch_0030/figB_stats_4x2.png"
+    tag = "eval_epoch_0030"
+    smape_gaussian_vs_numerical = 0.4991739729434434
+    figure_D = "/home/ludogio/Documents/JuliaProjects/ScoreUNet1D.jl/scripts/arnold/runs/run_037/figures/eval_epoch_0030/figD_responses_5x5.png"
+    response_run_dir = "/home/ludogio/Documents/JuliaProjects/ScoreUNet1D.jl/scripts/arnold/runs/run_037/figures/eval_epoch_0030/responses/run_001"
+    checkpoint_path = "/home/ludogio/Documents/JuliaProjects/ScoreUNet1D.jl/scripts/arnold/runs/run_037/model/checkpoints/epoch_0030.bson"
+    figure_C = "/home/ludogio/Documents/JuliaProjects/ScoreUNet1D.jl/scripts/arnold/runs/run_037/figures/eval_epoch_0030/figC_dynamics_2x2.png"
+    metrics_toml = "/home/ludogio/Documents/JuliaProjects/ScoreUNet1D.jl/scripts/arnold/runs/run_037/metrics/epoch_0030_metrics.toml"
+    [[evaluation.details]]
+    fig_dir = "/home/ludogio/Documents/JuliaProjects/ScoreUNet1D.jl/scripts/arnold/runs/run_037/figures/eval_epoch_0040"
+    global_kl = 0.003816910064876186
+    epoch = 40
+    response_summary = "/home/ludogio/Documents/JuliaProjects/ScoreUNet1D.jl/scripts/arnold/runs/run_037/figures/eval_epoch_0040/responses/run_001/responses_5x5_summary.toml"
+    avg_mode_kl_clipped = 0.007083252527917219
+    smape_unet_vs_numerical = 0.3844754634734096
+    figure_B = "/home/ludogio/Documents/JuliaProjects/ScoreUNet1D.jl/scripts/arnold/runs/run_037/figures/eval_epoch_0040/figB_stats_4x2.png"
+    tag = "eval_epoch_0040"
+    smape_gaussian_vs_numerical = 0.4991739729434434
+    figure_D = "/home/ludogio/Documents/JuliaProjects/ScoreUNet1D.jl/scripts/arnold/runs/run_037/figures/eval_epoch_0040/figD_responses_5x5.png"
+    response_run_dir = "/home/ludogio/Documents/JuliaProjects/ScoreUNet1D.jl/scripts/arnold/runs/run_037/figures/eval_epoch_0040/responses/run_001"
+    checkpoint_path = "/home/ludogio/Documents/JuliaProjects/ScoreUNet1D.jl/scripts/arnold/runs/run_037/model/checkpoints/epoch_0040.bson"
+    figure_C = "/home/ludogio/Documents/JuliaProjects/ScoreUNet1D.jl/scripts/arnold/runs/run_037/figures/eval_epoch_0040/figC_dynamics_2x2.png"
+    metrics_toml = "/home/ludogio/Documents/JuliaProjects/ScoreUNet1D.jl/scripts/arnold/runs/run_037/metrics/epoch_0040_metrics.toml"
+    [[evaluation.details]]
+    fig_dir = "/home/ludogio/Documents/JuliaProjects/ScoreUNet1D.jl/scripts/arnold/runs/run_037/figures/eval_epoch_0050"
+    global_kl = 0.0005661970059498898
+    epoch = 50
+    response_summary = "/home/ludogio/Documents/JuliaProjects/ScoreUNet1D.jl/scripts/arnold/runs/run_037/figures/eval_epoch_0050/responses/run_001/responses_5x5_summary.toml"
+    avg_mode_kl_clipped = 0.005463834533434047
+    smape_unet_vs_numerical = 0.4114215488845771
+    figure_B = "/home/ludogio/Documents/JuliaProjects/ScoreUNet1D.jl/scripts/arnold/runs/run_037/figures/eval_epoch_0050/figB_stats_4x2.png"
+    tag = "eval_epoch_0050"
+    smape_gaussian_vs_numerical = 0.4991739729434434
+    figure_D = "/home/ludogio/Documents/JuliaProjects/ScoreUNet1D.jl/scripts/arnold/runs/run_037/figures/eval_epoch_0050/figD_responses_5x5.png"
+    response_run_dir = "/home/ludogio/Documents/JuliaProjects/ScoreUNet1D.jl/scripts/arnold/runs/run_037/figures/eval_epoch_0050/responses/run_001"
+    checkpoint_path = "/home/ludogio/Documents/JuliaProjects/ScoreUNet1D.jl/scripts/arnold/runs/run_037/model/checkpoints/epoch_0050.bson"
+    figure_C = "/home/ludogio/Documents/JuliaProjects/ScoreUNet1D.jl/scripts/arnold/runs/run_037/figures/eval_epoch_0050/figC_dynamics_2x2.png"
+    metrics_toml = "/home/ludogio/Documents/JuliaProjects/ScoreUNet1D.jl/scripts/arnold/runs/run_037/metrics/epoch_0050_metrics.toml"
+    [[evaluation.details]]
+    fig_dir = "/home/ludogio/Documents/JuliaProjects/ScoreUNet1D.jl/scripts/arnold/runs/run_037/figures/eval_epoch_0060"
+    global_kl = 0.00016777813125333233
+    epoch = 60
+    response_summary = "/home/ludogio/Documents/JuliaProjects/ScoreUNet1D.jl/scripts/arnold/runs/run_037/figures/eval_epoch_0060/responses/run_001/responses_5x5_summary.toml"
+    avg_mode_kl_clipped = 0.003610638928289005
+    smape_unet_vs_numerical = 0.4168159344643664
+    figure_B = "/home/ludogio/Documents/JuliaProjects/ScoreUNet1D.jl/scripts/arnold/runs/run_037/figures/eval_epoch_0060/figB_stats_4x2.png"
+    tag = "eval_epoch_0060"
+    smape_gaussian_vs_numerical = 0.4991739729434434
+    figure_D = "/home/ludogio/Documents/JuliaProjects/ScoreUNet1D.jl/scripts/arnold/runs/run_037/figures/eval_epoch_0060/figD_responses_5x5.png"
+    response_run_dir = "/home/ludogio/Documents/JuliaProjects/ScoreUNet1D.jl/scripts/arnold/runs/run_037/figures/eval_epoch_0060/responses/run_001"
+    checkpoint_path = "/home/ludogio/Documents/JuliaProjects/ScoreUNet1D.jl/scripts/arnold/runs/run_037/model/checkpoints/epoch_0060.bson"
+    figure_C = "/home/ludogio/Documents/JuliaProjects/ScoreUNet1D.jl/scripts/arnold/runs/run_037/figures/eval_epoch_0060/figC_dynamics_2x2.png"
+    metrics_toml = "/home/ludogio/Documents/JuliaProjects/ScoreUNet1D.jl/scripts/arnold/runs/run_037/metrics/epoch_0060_metrics.toml"
+    [[evaluation.details]]
+    fig_dir = "/home/ludogio/Documents/JuliaProjects/ScoreUNet1D.jl/scripts/arnold/runs/run_037/figures/eval_epoch_0070"
+    global_kl = 0.00015961128498740522
+    epoch = 70
+    response_summary = "/home/ludogio/Documents/JuliaProjects/ScoreUNet1D.jl/scripts/arnold/runs/run_037/figures/eval_epoch_0070/responses/run_001/responses_5x5_summary.toml"
+    avg_mode_kl_clipped = 0.002760269293968767
+    smape_unet_vs_numerical = 0.4081066781026676
+    figure_B = "/home/ludogio/Documents/JuliaProjects/ScoreUNet1D.jl/scripts/arnold/runs/run_037/figures/eval_epoch_0070/figB_stats_4x2.png"
+    tag = "eval_epoch_0070"
+    smape_gaussian_vs_numerical = 0.4991739729434434
+    figure_D = "/home/ludogio/Documents/JuliaProjects/ScoreUNet1D.jl/scripts/arnold/runs/run_037/figures/eval_epoch_0070/figD_responses_5x5.png"
+    response_run_dir = "/home/ludogio/Documents/JuliaProjects/ScoreUNet1D.jl/scripts/arnold/runs/run_037/figures/eval_epoch_0070/responses/run_001"
+    checkpoint_path = "/home/ludogio/Documents/JuliaProjects/ScoreUNet1D.jl/scripts/arnold/runs/run_037/model/checkpoints/epoch_0070.bson"
+    figure_C = "/home/ludogio/Documents/JuliaProjects/ScoreUNet1D.jl/scripts/arnold/runs/run_037/figures/eval_epoch_0070/figC_dynamics_2x2.png"
+    metrics_toml = "/home/ludogio/Documents/JuliaProjects/ScoreUNet1D.jl/scripts/arnold/runs/run_037/metrics/epoch_0070_metrics.toml"
+    [[evaluation.details]]
+    fig_dir = "/home/ludogio/Documents/JuliaProjects/ScoreUNet1D.jl/scripts/arnold/runs/run_037/figures/eval_epoch_0080"
+    global_kl = 0.00011217219758283521
+    epoch = 80
+    response_summary = "/home/ludogio/Documents/JuliaProjects/ScoreUNet1D.jl/scripts/arnold/runs/run_037/figures/eval_epoch_0080/responses/run_001/responses_5x5_summary.toml"
+    avg_mode_kl_clipped = 0.0033976268686859118
+    smape_unet_vs_numerical = 0.3876588960726671
+    figure_B = "/home/ludogio/Documents/JuliaProjects/ScoreUNet1D.jl/scripts/arnold/runs/run_037/figures/eval_epoch_0080/figB_stats_4x2.png"
+    tag = "eval_epoch_0080"
+    smape_gaussian_vs_numerical = 0.4991739729434434
+    figure_D = "/home/ludogio/Documents/JuliaProjects/ScoreUNet1D.jl/scripts/arnold/runs/run_037/figures/eval_epoch_0080/figD_responses_5x5.png"
+    response_run_dir = "/home/ludogio/Documents/JuliaProjects/ScoreUNet1D.jl/scripts/arnold/runs/run_037/figures/eval_epoch_0080/responses/run_001"
+    checkpoint_path = "/home/ludogio/Documents/JuliaProjects/ScoreUNet1D.jl/scripts/arnold/runs/run_037/model/checkpoints/epoch_0080.bson"
+    figure_C = "/home/ludogio/Documents/JuliaProjects/ScoreUNet1D.jl/scripts/arnold/runs/run_037/figures/eval_epoch_0080/figC_dynamics_2x2.png"
+    metrics_toml = "/home/ludogio/Documents/JuliaProjects/ScoreUNet1D.jl/scripts/arnold/runs/run_037/metrics/epoch_0080_metrics.toml"
+    [[evaluation.details]]
+    fig_dir = "/home/ludogio/Documents/JuliaProjects/ScoreUNet1D.jl/scripts/arnold/runs/run_037/figures/eval_epoch_0090"
+    global_kl = 0.00027652827521669975
+    epoch = 90
+    response_summary = "/home/ludogio/Documents/JuliaProjects/ScoreUNet1D.jl/scripts/arnold/runs/run_037/figures/eval_epoch_0090/responses/run_001/responses_5x5_summary.toml"
+    avg_mode_kl_clipped = 0.0029536473461681586
+    smape_unet_vs_numerical = 0.41383969102976875
+    figure_B = "/home/ludogio/Documents/JuliaProjects/ScoreUNet1D.jl/scripts/arnold/runs/run_037/figures/eval_epoch_0090/figB_stats_4x2.png"
+    tag = "eval_epoch_0090"
+    smape_gaussian_vs_numerical = 0.4991739729434434
+    figure_D = "/home/ludogio/Documents/JuliaProjects/ScoreUNet1D.jl/scripts/arnold/runs/run_037/figures/eval_epoch_0090/figD_responses_5x5.png"
+    response_run_dir = "/home/ludogio/Documents/JuliaProjects/ScoreUNet1D.jl/scripts/arnold/runs/run_037/figures/eval_epoch_0090/responses/run_001"
+    checkpoint_path = "/home/ludogio/Documents/JuliaProjects/ScoreUNet1D.jl/scripts/arnold/runs/run_037/model/checkpoints/epoch_0090.bson"
+    figure_C = "/home/ludogio/Documents/JuliaProjects/ScoreUNet1D.jl/scripts/arnold/runs/run_037/figures/eval_epoch_0090/figC_dynamics_2x2.png"
+    metrics_toml = "/home/ludogio/Documents/JuliaProjects/ScoreUNet1D.jl/scripts/arnold/runs/run_037/metrics/epoch_0090_metrics.toml"
+    [[evaluation.details]]
+    fig_dir = "/home/ludogio/Documents/JuliaProjects/ScoreUNet1D.jl/scripts/arnold/runs/run_037/figures/eval_epoch_0100"
+    global_kl = 0.0004529896022806957
+    epoch = 100
+    response_summary = "/home/ludogio/Documents/JuliaProjects/ScoreUNet1D.jl/scripts/arnold/runs/run_037/figures/eval_epoch_0100/responses/run_001/responses_5x5_summary.toml"
+    avg_mode_kl_clipped = 0.004321542524502867
+    smape_unet_vs_numerical = 0.38851044105110494
+    figure_B = "/home/ludogio/Documents/JuliaProjects/ScoreUNet1D.jl/scripts/arnold/runs/run_037/figures/eval_epoch_0100/figB_stats_4x2.png"
+    tag = "eval_epoch_0100"
+    smape_gaussian_vs_numerical = 0.4991739729434434
+    figure_D = "/home/ludogio/Documents/JuliaProjects/ScoreUNet1D.jl/scripts/arnold/runs/run_037/figures/eval_epoch_0100/figD_responses_5x5.png"
+    response_run_dir = "/home/ludogio/Documents/JuliaProjects/ScoreUNet1D.jl/scripts/arnold/runs/run_037/figures/eval_epoch_0100/responses/run_001"
+    checkpoint_path = "/home/ludogio/Documents/JuliaProjects/ScoreUNet1D.jl/scripts/arnold/runs/run_037/model/checkpoints/epoch_0100.bson"
+    figure_C = "/home/ludogio/Documents/JuliaProjects/ScoreUNet1D.jl/scripts/arnold/runs/run_037/figures/eval_epoch_0100/figC_dynamics_2x2.png"
+    metrics_toml = "/home/ludogio/Documents/JuliaProjects/ScoreUNet1D.jl/scripts/arnold/runs/run_037/metrics/epoch_0100_metrics.toml"
+
+[parameters_used]
+langevin = "/home/ludogio/Documents/JuliaProjects/ScoreUNet1D.jl/scripts/arnold/runs/run_037/params/parameters_langevin_used.toml"
+responses = "/home/ludogio/Documents/JuliaProjects/ScoreUNet1D.jl/scripts/arnold/runs/run_037/params/parameters_responses_used.toml"
+train = "/home/ludogio/Documents/JuliaProjects/ScoreUNet1D.jl/scripts/arnold/runs/run_037/params/parameters_train_used.toml"
+pipeline = "/home/ludogio/Documents/JuliaProjects/ScoreUNet1D.jl/scripts/arnold/runs/run_037/params/parameters_pipeline_used.toml"
+
+[training]
+epochs = 100
+model_path = "/home/ludogio/Documents/JuliaProjects/ScoreUNet1D.jl/scripts/arnold/runs/run_037/model/score_model.bson"
+figure_A = "/home/ludogio/Documents/JuliaProjects/ScoreUNet1D.jl/scripts/arnold/runs/run_037/figures/training/figA_training_3panels.png"
+training_metrics_csv = "/home/ludogio/Documents/JuliaProjects/ScoreUNet1D.jl/scripts/arnold/runs/run_037/figures/training/training_metrics.csv"
+checkpoint_every = 10
+state_path = "/home/ludogio/Documents/JuliaProjects/ScoreUNet1D.jl/scripts/arnold/runs/run_037/model/training_state_latest.bson"
+checkpoint_dir = "/home/ludogio/Documents/JuliaProjects/ScoreUNet1D.jl/scripts/arnold/runs/run_037/model/checkpoints"

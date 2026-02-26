@@ -1,0 +1,17 @@
+figB = "/home/ludogio/Documents/JuliaProjects/ScoreUNet1D.jl/scripts/arnold/_smoke/runs/run_011/figures/eval_epoch_0002/figB_stats_4x2.png"
+figC = "/home/ludogio/Documents/JuliaProjects/ScoreUNet1D.jl/scripts/arnold/_smoke/runs/run_011/figures/eval_epoch_0002/figC_dynamics_2x2.png"
+observations_path = "/home/ludogio/Documents/JuliaProjects/ScoreUNet1D.jl/scripts/arnold/data/l96_arnold_datasets.hdf5"
+device = "GPU:1"
+metrics_path = "/home/ludogio/Documents/JuliaProjects/ScoreUNet1D.jl/scripts/arnold/_smoke/runs/run_011/metrics/epoch_0002_langevin_metrics.txt"
+checkpoint_path = "/home/ludogio/Documents/JuliaProjects/ScoreUNet1D.jl/scripts/arnold/_smoke/runs/run_011/model/checkpoints/epoch_0002.bson"
+
+[metrics]
+avg_mode_js_clipped = 0.023708967834344216
+global_kl_from_run_langevin = 0.031451889982155506
+avg_mode_kl_clipped = 0.17269885300400697
+langevin_ensembles = 32.0
+target_avg_mode_kl = 0.05
+langevin_resolution = 8.0
+langevin_nsteps = 2500.0
+max_mode_kl_clipped = 0.26716379738475404
+stein_sample_stride = 34.0

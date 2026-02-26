@@ -1,0 +1,110 @@
+updated_at = "2026-02-25T08:22:01"
+
+[[runs]]
+best_epoch = -1
+data_params = "/home/ludogio/Documents/JuliaProjects/ScoreUNet1D.jl/scripts/arnold/optimization_campaigns/campaign_jacobian_8h_20260225/configs/01_baseline/parameters_data.toml"
+error = """failed process: Process(`julia --project=/home/ludogio/Documents/JuliaProjects/ScoreUNet1D.jl/ /home/ludogio/Documents/JuliaProjects/ScoreUNet1D.jl/scripts/arnold/run_pipeline.jl --params /home/ludogio/Documents/JuliaProjects/ScoreUNet1D.jl/scripts/arnold/optimization_campaigns/campaign_jacobian_8h_20260225/configs/01_baseline/parameters_pipeline.toml`, ProcessExited(1)) [1]\n"""
+kl_at_best_epoch = nan
+duration_min = 81.4492137670517
+name = "baseline"
+responses_params = "/home/ludogio/Documents/JuliaProjects/ScoreUNet1D.jl/scripts/arnold/optimization_campaigns/campaign_jacobian_8h_20260225/configs/01_baseline/parameters_responses.toml"
+run_dir = "/home/ludogio/Documents/JuliaProjects/ScoreUNet1D.jl/scripts/arnold/optimization_campaigns/campaign_jacobian_8h_20260225/runs/run_001"
+status = "failed"
+train_params = "/home/ludogio/Documents/JuliaProjects/ScoreUNet1D.jl/scripts/arnold/optimization_campaigns/campaign_jacobian_8h_20260225/configs/01_baseline/parameters_train.toml"
+best_summary = ""
+notes = "Baseline from strongest prior regime (sigma=0.05, correction on, hutchinson)"
+num_response_summaries = 0
+pipeline_params = "/home/ludogio/Documents/JuliaProjects/ScoreUNet1D.jl/scripts/arnold/optimization_campaigns/campaign_jacobian_8h_20260225/configs/01_baseline/parameters_pipeline.toml"
+best_kl_overall = nan
+log_path = "/home/ludogio/Documents/JuliaProjects/ScoreUNet1D.jl/scripts/arnold/optimization_campaigns/campaign_jacobian_8h_20260225/logs/01_baseline.log"
+best_smape = nan
+[[runs]]
+best_epoch = -1
+data_params = "/home/ludogio/Documents/JuliaProjects/ScoreUNet1D.jl/scripts/arnold/optimization_campaigns/campaign_jacobian_8h_20260225/configs/02_sigma_0p035/parameters_data.toml"
+error = """failed process: Process(`julia --project=/home/ludogio/Documents/JuliaProjects/ScoreUNet1D.jl/ /home/ludogio/Documents/JuliaProjects/ScoreUNet1D.jl/scripts/arnold/run_pipeline.jl --params /home/ludogio/Documents/JuliaProjects/ScoreUNet1D.jl/scripts/arnold/optimization_campaigns/campaign_jacobian_8h_20260225/configs/02_sigma_0p035/parameters_pipeline.toml`, ProcessExited(1)) [1]\n"""
+kl_at_best_epoch = nan
+duration_min = 80.57982910076777
+name = "sigma_0p035"
+responses_params = "/home/ludogio/Documents/JuliaProjects/ScoreUNet1D.jl/scripts/arnold/optimization_campaigns/campaign_jacobian_8h_20260225/configs/02_sigma_0p035/parameters_responses.toml"
+run_dir = "/home/ludogio/Documents/JuliaProjects/ScoreUNet1D.jl/scripts/arnold/optimization_campaigns/campaign_jacobian_8h_20260225/runs/run_002"
+status = "failed"
+train_params = "/home/ludogio/Documents/JuliaProjects/ScoreUNet1D.jl/scripts/arnold/optimization_campaigns/campaign_jacobian_8h_20260225/configs/02_sigma_0p035/parameters_train.toml"
+best_summary = ""
+notes = "Training sigma sweep down"
+num_response_summaries = 0
+pipeline_params = "/home/ludogio/Documents/JuliaProjects/ScoreUNet1D.jl/scripts/arnold/optimization_campaigns/campaign_jacobian_8h_20260225/configs/02_sigma_0p035/parameters_pipeline.toml"
+best_kl_overall = nan
+log_path = "/home/ludogio/Documents/JuliaProjects/ScoreUNet1D.jl/scripts/arnold/optimization_campaigns/campaign_jacobian_8h_20260225/logs/02_sigma_0p035.log"
+best_smape = nan
+[[runs]]
+best_epoch = -1
+data_params = "/home/ludogio/Documents/JuliaProjects/ScoreUNet1D.jl/scripts/arnold/optimization_campaigns/campaign_jacobian_8h_20260225/configs/03_sigma_0p070/parameters_data.toml"
+error = """failed process: Process(`julia --project=/home/ludogio/Documents/JuliaProjects/ScoreUNet1D.jl/ /home/ludogio/Documents/JuliaProjects/ScoreUNet1D.jl/scripts/arnold/run_pipeline.jl --params /home/ludogio/Documents/JuliaProjects/ScoreUNet1D.jl/scripts/arnold/optimization_campaigns/campaign_jacobian_8h_20260225/configs/03_sigma_0p070/parameters_pipeline.toml`, ProcessExited(1)) [1]\n"""
+kl_at_best_epoch = nan
+duration_min = 82.31309101581573
+name = "sigma_0p070"
+responses_params = "/home/ludogio/Documents/JuliaProjects/ScoreUNet1D.jl/scripts/arnold/optimization_campaigns/campaign_jacobian_8h_20260225/configs/03_sigma_0p070/parameters_responses.toml"
+run_dir = "/home/ludogio/Documents/JuliaProjects/ScoreUNet1D.jl/scripts/arnold/optimization_campaigns/campaign_jacobian_8h_20260225/runs/run_003"
+status = "failed"
+train_params = "/home/ludogio/Documents/JuliaProjects/ScoreUNet1D.jl/scripts/arnold/optimization_campaigns/campaign_jacobian_8h_20260225/configs/03_sigma_0p070/parameters_train.toml"
+best_summary = ""
+notes = "Training sigma sweep up"
+num_response_summaries = 0
+pipeline_params = "/home/ludogio/Documents/JuliaProjects/ScoreUNet1D.jl/scripts/arnold/optimization_campaigns/campaign_jacobian_8h_20260225/configs/03_sigma_0p070/parameters_pipeline.toml"
+best_kl_overall = nan
+log_path = "/home/ludogio/Documents/JuliaProjects/ScoreUNet1D.jl/scripts/arnold/optimization_campaigns/campaign_jacobian_8h_20260225/logs/03_sigma_0p070.log"
+best_smape = nan
+[[runs]]
+best_epoch = -1
+data_params = "/home/ludogio/Documents/JuliaProjects/ScoreUNet1D.jl/scripts/arnold/optimization_campaigns/campaign_jacobian_8h_20260225/configs/04_response_exact_div/parameters_data.toml"
+error = """failed process: Process(`julia --project=/home/ludogio/Documents/JuliaProjects/ScoreUNet1D.jl/ /home/ludogio/Documents/JuliaProjects/ScoreUNet1D.jl/scripts/arnold/run_pipeline.jl --params /home/ludogio/Documents/JuliaProjects/ScoreUNet1D.jl/scripts/arnold/optimization_campaigns/campaign_jacobian_8h_20260225/configs/04_response_exact_div/parameters_pipeline.toml`, ProcessExited(1)) [1]\n"""
+kl_at_best_epoch = nan
+duration_min = 64.97961184978485
+name = "response_exact_div"
+responses_params = "/home/ludogio/Documents/JuliaProjects/ScoreUNet1D.jl/scripts/arnold/optimization_campaigns/campaign_jacobian_8h_20260225/configs/04_response_exact_div/parameters_responses.toml"
+run_dir = "/home/ludogio/Documents/JuliaProjects/ScoreUNet1D.jl/scripts/arnold/optimization_campaigns/campaign_jacobian_8h_20260225/runs/run_004"
+status = "failed"
+train_params = "/home/ludogio/Documents/JuliaProjects/ScoreUNet1D.jl/scripts/arnold/optimization_campaigns/campaign_jacobian_8h_20260225/configs/04_response_exact_div/parameters_train.toml"
+best_summary = ""
+notes = "Response-stage exact divergence for UNet conjugates"
+num_response_summaries = 0
+pipeline_params = "/home/ludogio/Documents/JuliaProjects/ScoreUNet1D.jl/scripts/arnold/optimization_campaigns/campaign_jacobian_8h_20260225/configs/04_response_exact_div/parameters_pipeline.toml"
+best_kl_overall = nan
+log_path = "/home/ludogio/Documents/JuliaProjects/ScoreUNet1D.jl/scripts/arnold/optimization_campaigns/campaign_jacobian_8h_20260225/logs/04_response_exact_div.log"
+best_smape = nan
+[[runs]]
+best_epoch = -1
+data_params = "/home/ludogio/Documents/JuliaProjects/ScoreUNet1D.jl/scripts/arnold/optimization_campaigns/campaign_jacobian_8h_20260225/configs/05_response_hutch_probe20/parameters_data.toml"
+error = """failed process: Process(`julia --project=/home/ludogio/Documents/JuliaProjects/ScoreUNet1D.jl/ /home/ludogio/Documents/JuliaProjects/ScoreUNet1D.jl/scripts/arnold/run_pipeline.jl --params /home/ludogio/Documents/JuliaProjects/ScoreUNet1D.jl/scripts/arnold/optimization_campaigns/campaign_jacobian_8h_20260225/configs/05_response_hutch_probe20/parameters_pipeline.toml`, ProcessExited(1)) [1]\n"""
+kl_at_best_epoch = nan
+duration_min = 64.3631510814031
+name = "response_hutch_probe20"
+responses_params = "/home/ludogio/Documents/JuliaProjects/ScoreUNet1D.jl/scripts/arnold/optimization_campaigns/campaign_jacobian_8h_20260225/configs/05_response_hutch_probe20/parameters_responses.toml"
+run_dir = "/home/ludogio/Documents/JuliaProjects/ScoreUNet1D.jl/scripts/arnold/optimization_campaigns/campaign_jacobian_8h_20260225/runs/run_005"
+status = "failed"
+train_params = "/home/ludogio/Documents/JuliaProjects/ScoreUNet1D.jl/scripts/arnold/optimization_campaigns/campaign_jacobian_8h_20260225/configs/05_response_hutch_probe20/parameters_train.toml"
+best_summary = ""
+notes = "Response-stage higher-probe Hutchinson divergence"
+num_response_summaries = 0
+pipeline_params = "/home/ludogio/Documents/JuliaProjects/ScoreUNet1D.jl/scripts/arnold/optimization_campaigns/campaign_jacobian_8h_20260225/configs/05_response_hutch_probe20/parameters_pipeline.toml"
+best_kl_overall = nan
+log_path = "/home/ludogio/Documents/JuliaProjects/ScoreUNet1D.jl/scripts/arnold/optimization_campaigns/campaign_jacobian_8h_20260225/logs/05_response_hutch_probe20.log"
+best_smape = nan
+[[runs]]
+best_epoch = -1
+data_params = "/home/ludogio/Documents/JuliaProjects/ScoreUNet1D.jl/scripts/arnold/optimization_campaigns/campaign_jacobian_8h_20260225/configs/06_data_autofit_on/parameters_data.toml"
+error = """failed process: Process(`julia --project=/home/ludogio/Documents/JuliaProjects/ScoreUNet1D.jl/ /home/ludogio/Documents/JuliaProjects/ScoreUNet1D.jl/scripts/arnold/run_pipeline.jl --params /home/ludogio/Documents/JuliaProjects/ScoreUNet1D.jl/scripts/arnold/optimization_campaigns/campaign_jacobian_8h_20260225/configs/06_data_autofit_on/parameters_pipeline.toml`, ProcessExited(1)) [1]\n"""
+kl_at_best_epoch = nan
+duration_min = 7.722273433208466
+name = "data_autofit_on"
+responses_params = "/home/ludogio/Documents/JuliaProjects/ScoreUNet1D.jl/scripts/arnold/optimization_campaigns/campaign_jacobian_8h_20260225/configs/06_data_autofit_on/parameters_responses.toml"
+run_dir = "/home/ludogio/Documents/JuliaProjects/ScoreUNet1D.jl/scripts/arnold/optimization_campaigns/campaign_jacobian_8h_20260225/runs/run_006"
+status = "failed"
+train_params = "/home/ludogio/Documents/JuliaProjects/ScoreUNet1D.jl/scripts/arnold/optimization_campaigns/campaign_jacobian_8h_20260225/configs/06_data_autofit_on/parameters_train.toml"
+best_summary = ""
+notes = "Enable closure auto-fit against two-scale data"
+num_response_summaries = 0
+pipeline_params = "/home/ludogio/Documents/JuliaProjects/ScoreUNet1D.jl/scripts/arnold/optimization_campaigns/campaign_jacobian_8h_20260225/configs/06_data_autofit_on/parameters_pipeline.toml"
+best_kl_overall = nan
+log_path = "/home/ludogio/Documents/JuliaProjects/ScoreUNet1D.jl/scripts/arnold/optimization_campaigns/campaign_jacobian_8h_20260225/logs/06_data_autofit_on.log"
+best_smape = nan

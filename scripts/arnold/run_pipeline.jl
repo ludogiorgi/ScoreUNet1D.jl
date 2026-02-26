@@ -8,6 +8,7 @@ if get(ENV, "GKSwstype", "") == ""
 end
 
 using Dates
+using Distributed
 using Plots
 using Printf
 using Statistics
@@ -67,7 +68,7 @@ function load_pipeline_config(path::AbstractString)
 
         "resources.train_device" => as_str(resources, "train_device", "GPU:0"),
         "resources.langevin_device" => as_str(resources, "langevin_device", "GPU:1"),
-        "resources.responses_score_device" => as_str(resources, "responses_score_device", "CPU"),
+        "resources.responses_score_device" => as_str(resources, "responses_score_device", "GPU:1"),
         "resources.responses_threads" => as_str(resources, "responses_threads", "auto"),
         "resources.checkpoint_poll_seconds" => as_float(resources, "checkpoint_poll_seconds", 2.0),
         "resources.queue_poll_seconds" => as_float(resources, "queue_poll_seconds", 1.0),
@@ -190,13 +191,6 @@ function launch_logged(cmd::Cmd, log_path::AbstractString)
     return proc, io
 end
 
-function wait_logged!(proc, io::IO, label::AbstractString, log_path::AbstractString)
-    wait(proc)
-    close(io)
-    success(proc) && return nothing
-    error("$label failed. See log: $log_path")
-end
-
 function latest_run_dir(root::AbstractString)
     isdir(root) || return ""
     best_id = -1
@@ -229,94 +223,240 @@ function get_nested_float(doc::Dict{String,Any}, path::Vector{String}; default::
     return default
 end
 
-function run_eval_for_checkpoint!(cfg::Dict{String,Any},
-    effective_params::Dict{String,String},
-    dirs::Dict{String,String},
-    epoch::Int,
-    checkpoint_path::AbstractString)
+function pipeline_project_root()
+    project_file = Base.active_project()
+    project_file === nothing && return abspath(joinpath(@__DIR__, "..", ".."))
+    return dirname(project_file)
+end
+
+function eval_layout(dirs::Dict{String,String}, epoch::Int)
     epoch_tag = lpad(string(epoch), 4, '0')
     eval_tag = "eval_epoch_" * epoch_tag
     eval_dir = joinpath(dirs["figures"], eval_tag)
-    mkpath(eval_dir)
+    return (
+        epoch_tag=epoch_tag,
+        eval_tag=eval_tag,
+        eval_dir=eval_dir,
+        responses_root=joinpath(eval_dir, "responses"),
+        metrics_txt=joinpath(dirs["metrics"], "epoch_" * epoch_tag * "_langevin_metrics.txt"),
+        metrics_toml=joinpath(dirs["metrics"], "epoch_" * epoch_tag * "_metrics.toml"),
+    )
+end
 
-    pipeline_log = joinpath(dirs["logs"], "pipeline.log")
-    append_log(pipeline_log, "[eval] start epoch=$epoch checkpoint=$(abspath(checkpoint_path))")
+function start_stage_worker(stage::Symbol, script_path::AbstractString;
+    threads::Union{Nothing,String}=nothing)
+    project_root = pipeline_project_root()
+    exeflags = threads === nothing ?
+        "--project=$(project_root)" :
+        "--project=$(project_root) --threads $(threads)"
 
-    procs = Tuple[]
+    pid = only(addprocs(1; exeflags=exeflags))
+    script_abs = abspath(script_path)
+    remotecall_fetch(
+        Base.eval,
+        pid,
+        Main,
+        quote
+            if get(ENV, "GKSwstype", "") == ""
+                ENV["GKSwstype"] = "100"
+            end
+            import Pkg
+            Pkg.activate($project_root; io=devnull)
+            cd($project_root)
+            include($script_abs)
+            isdefined(Main, :main) || error("Worker stage script did not define main(args): $script_abs")
+            global __arnold_stage_main = getfield(Main, :main)
+            global __arnold_stage_name = $(QuoteNode(stage))
+            nothing
+        end,
+    )
+    return pid
+end
 
-    metrics_txt = joinpath(dirs["metrics"], "epoch_" * epoch_tag * "_langevin_metrics.txt")
-    if cfg["evaluation.run_langevin"]
-        lg_log = joinpath(dirs["logs"], "eval_epoch_" * epoch_tag * "_langevin.log")
-        cmd_lg = `julia --project=. scripts/arnold/run_langevin.jl --params $(effective_params["langevin"]) --checkpoint $(abspath(checkpoint_path)) --output-dir $(eval_dir) --metrics-path $(metrics_txt)`
-        proc_lg, io_lg = launch_logged(cmd_lg, lg_log)
-        push!(procs, ("langevin", proc_lg, io_lg, lg_log))
-    end
-
-    responses_root = joinpath(eval_dir, "responses")
-    if cfg["evaluation.run_responses"]
-        rp_log = joinpath(dirs["logs"], "eval_epoch_" * epoch_tag * "_responses.log")
-        threads = cfg["resources.responses_threads"]
-        cmd_resp = `julia --threads $(threads) --project=. scripts/arnold/compute_responses.jl --params $(effective_params["responses"]) --checkpoint $(abspath(checkpoint_path)) --output-dir $(responses_root) --apply-correction $(string(cfg["evaluation.response_apply_correction"])) --response-kind $(cfg["evaluation.response_kind"])`
-        proc_resp, io_resp = launch_logged(cmd_resp, rp_log)
-        push!(procs, ("responses", proc_resp, io_resp, rp_log))
-    end
-
+function stop_stage_workers!(stage_workers::Dict{Symbol,Int}, pipeline_log::AbstractString)
+    isempty(stage_workers) && return nothing
+    pids = collect(values(stage_workers))
     try
-        for (label, proc, io, log_path) in procs
-            wait_logged!(proc, io, "epoch $epoch $label stage", log_path)
-        end
+        rmprocs(pids)
+        append_log(pipeline_log, "stopped persistent workers pids=$(join(pids, ','))")
     catch err
-        for (_, proc, io, _) in procs
-            if Base.process_running(proc)
-                try
-                    kill(proc)
-                catch
+        append_log(pipeline_log, "warning failed to stop persistent workers: $(sprint(showerror, err))")
+    end
+    return nothing
+end
+
+function run_stage_on_worker!(pid::Int, stage::Symbol, args::Vector{String}, log_path::AbstractString)
+    mkpath(dirname(log_path))
+    worker_log = abspath(log_path)
+    argv = collect(args)
+    arg_preview = join(argv, ' ')
+    log_header = "[persistent-worker] stage=$(stage) args=$(arg_preview)"
+    remotecall_fetch(
+        Base.eval,
+        pid,
+        Main,
+        quote
+            open($worker_log, "a") do io
+                println(io, $log_header)
+                flush(io)
+                redirect_stdout(io) do
+                    redirect_stderr(io) do
+                        try
+                            Main.__arnold_stage_main($argv)
+                        catch err
+                            showerror(io, err, catch_backtrace())
+                            println(io)
+                            flush(io)
+                            rethrow(err)
+                        end
+                    end
                 end
             end
-            try
-                close(io)
-            catch
-            end
-        end
-        rethrow(err)
+            nothing
+        end,
+    )
+    return nothing
+end
+
+function required_eval_stages(cfg::Dict{String,Any})
+    stages = Symbol[]
+    cfg["evaluation.run_langevin"] && push!(stages, :langevin)
+    cfg["evaluation.run_responses"] && push!(stages, :responses)
+    return stages
+end
+
+function run_langevin_stage_for_checkpoint!(cfg::Dict{String,Any},
+    effective_params::Dict{String,String},
+    dirs::Dict{String,String},
+    stage_workers::Dict{Symbol,Int},
+    epoch::Int,
+    checkpoint_path::AbstractString)
+    layout = eval_layout(dirs, epoch)
+    mkpath(layout.eval_dir)
+
+    pipeline_log = joinpath(dirs["logs"], "pipeline.log")
+    checkpoint_abs = abspath(checkpoint_path)
+    lg_log = joinpath(dirs["logs"], "eval_epoch_" * layout.epoch_tag * "_langevin.log")
+    append_log(pipeline_log, "[langevin] start epoch=$epoch checkpoint=$checkpoint_abs")
+
+    args = [
+        "--params", effective_params["langevin"],
+        "--checkpoint", checkpoint_abs,
+        "--output-dir", layout.eval_dir,
+        "--metrics-path", layout.metrics_txt,
+    ]
+    try
+        run_stage_on_worker!(stage_workers[:langevin], :langevin, args, lg_log)
+    catch err
+        error("epoch $epoch langevin stage failed. See log: $lg_log\n$(sprint(showerror, err))")
     end
 
-    metrics = read_keyval_metrics(metrics_txt)
+    metrics = read_keyval_metrics(layout.metrics_txt)
     avg_mode_kl = get(metrics, "avg_mode_kl_clipped", NaN)
     global_kl = get(metrics, "global_kl_from_run_langevin", NaN)
+    append_log(pipeline_log, "[langevin] done epoch=$epoch avg_mode_kl=$(avg_mode_kl)")
 
-    figB = joinpath(eval_dir, "figB_stats_4x2.png")
-    figC = joinpath(eval_dir, "figC_dynamics_2x2.png")
-    figD = ""
-    response_run_dir = ""
-    response_summary = ""
-    smape_unet = NaN
+    figB = joinpath(layout.eval_dir, "figB_stats_4x2.png")
+    figC = joinpath(layout.eval_dir, "figC_dynamics_2x2.png")
+    return Dict{String,Any}(
+        "stage" => "langevin",
+        "epoch" => epoch,
+        "checkpoint_path" => checkpoint_abs,
+        "metrics" => metrics,
+        "avg_mode_kl_clipped" => avg_mode_kl,
+        "global_kl" => global_kl,
+        "figure_B" => isfile(figB) ? abspath(figB) : "",
+        "figure_C" => isfile(figC) ? abspath(figC) : "",
+    )
+end
 
-    if cfg["evaluation.run_responses"]
-        response_run_dir = latest_run_dir(responses_root)
-        isempty(response_run_dir) && error("Response stage completed but no run_### folder was created in $responses_root")
+function run_responses_stage_for_checkpoint!(cfg::Dict{String,Any},
+    effective_params::Dict{String,String},
+    dirs::Dict{String,String},
+    stage_workers::Dict{Symbol,Int},
+    epoch::Int,
+    checkpoint_path::AbstractString)
+    layout = eval_layout(dirs, epoch)
+    mkpath(layout.eval_dir)
+    mkpath(layout.responses_root)
 
-        response_summary = joinpath(response_run_dir, "responses_5x5_summary.toml")
-        isfile(response_summary) || error("Missing response summary: $response_summary")
+    pipeline_log = joinpath(dirs["logs"], "pipeline.log")
+    checkpoint_abs = abspath(checkpoint_path)
+    rp_log = joinpath(dirs["logs"], "eval_epoch_" * layout.epoch_tag * "_responses.log")
+    append_log(pipeline_log, "[responses] start epoch=$epoch checkpoint=$checkpoint_abs")
 
-        summary_doc = TOML.parsefile(response_summary)
-        smape_unet = get_nested_float(summary_doc, ["jacobian_distance_smape", "unet_vs_numerical"])
-        if !isfinite(smape_unet)
-            # Backward-compatible fallback for older summaries that only exported RMSE.
-            smape_unet = get_nested_float(summary_doc, ["rmse", "numerics_vs_unet_corrected", "overall"])
-        end
-        if !isfinite(smape_unet)
-            smape_unet = get_nested_float(summary_doc, ["rmse", "numerics_vs_unet_raw", "overall"])
-        end
-
-        figD_src = joinpath(response_run_dir, "responses_5x5_selected_methods.png")
-        if isfile(figD_src)
-            figD = joinpath(eval_dir, "figD_responses_5x5.png")
-            cp(figD_src, figD; force=true)
-        end
+    args = [
+        "--params", effective_params["responses"],
+        "--checkpoint", checkpoint_abs,
+        "--output-dir", layout.responses_root,
+        "--apply-correction", string(cfg["evaluation.response_apply_correction"]),
+        "--response-kind", cfg["evaluation.response_kind"],
+    ]
+    try
+        run_stage_on_worker!(stage_workers[:responses], :responses, args, rp_log)
+    catch err
+        error("epoch $epoch responses stage failed. See log: $rp_log\n$(sprint(showerror, err))")
     end
 
-    metrics_toml = joinpath(dirs["metrics"], "epoch_" * epoch_tag * "_metrics.toml")
+    response_run_dir = latest_run_dir(layout.responses_root)
+    isempty(response_run_dir) && error("Response stage completed but no run_### folder was created in $(layout.responses_root)")
+
+    response_summary = joinpath(response_run_dir, "responses_5x5_summary.toml")
+    isfile(response_summary) || error("Missing response summary: $response_summary")
+
+    summary_doc = TOML.parsefile(response_summary)
+    smape_unet = get_nested_float(summary_doc, ["jacobian_distance_smape", "unet_vs_numerical"])
+    smape_gaussian = get_nested_float(summary_doc, ["jacobian_distance_smape", "gaussian_vs_numerical"])
+    if !isfinite(smape_unet)
+        # Backward-compatible fallback for older summaries that only exported RMSE.
+        smape_unet = get_nested_float(summary_doc, ["rmse", "numerics_vs_unet_corrected", "overall"])
+    end
+    if !isfinite(smape_unet)
+        smape_unet = get_nested_float(summary_doc, ["rmse", "numerics_vs_unet_raw", "overall"])
+    end
+    if !isfinite(smape_gaussian)
+        # Backward-compatible fallback for older summaries that only exported RMSE.
+        smape_gaussian = get_nested_float(summary_doc, ["rmse", "numerics_vs_gaussian", "overall"])
+    end
+
+    figD = ""
+    figD_src = joinpath(response_run_dir, "responses_5x5_selected_methods.png")
+    if isfile(figD_src)
+        figD = joinpath(layout.eval_dir, "figD_responses_5x5.png")
+        cp(figD_src, figD; force=true)
+    end
+
+    append_log(pipeline_log, "[responses] done epoch=$epoch smape_unet=$(smape_unet) smape_gaussian=$(smape_gaussian)")
+    return Dict{String,Any}(
+        "stage" => "responses",
+        "epoch" => epoch,
+        "checkpoint_path" => checkpoint_abs,
+        "smape_unet_vs_numerical" => smape_unet,
+        "smape_gaussian_vs_numerical" => smape_gaussian,
+        "figure_D" => isempty(figD) ? "" : abspath(figD),
+        "response_run_dir" => response_run_dir,
+        "response_summary" => response_summary,
+    )
+end
+
+function compose_eval_row!(cfg::Dict{String,Any},
+    dirs::Dict{String,String},
+    epoch::Int,
+    checkpoint_path::AbstractString,
+    stage_payloads::Dict{Symbol,Dict{String,Any}})
+    layout = eval_layout(dirs, epoch)
+    metrics = haskey(stage_payloads, :langevin) ? stage_payloads[:langevin]["metrics"] : Dict{String,Float64}()
+    avg_mode_kl = haskey(stage_payloads, :langevin) ? stage_payloads[:langevin]["avg_mode_kl_clipped"] : NaN
+    global_kl = haskey(stage_payloads, :langevin) ? stage_payloads[:langevin]["global_kl"] : NaN
+    figB = haskey(stage_payloads, :langevin) ? String(stage_payloads[:langevin]["figure_B"]) : ""
+    figC = haskey(stage_payloads, :langevin) ? String(stage_payloads[:langevin]["figure_C"]) : ""
+    figD = haskey(stage_payloads, :responses) ? String(stage_payloads[:responses]["figure_D"]) : ""
+    response_run_dir = haskey(stage_payloads, :responses) ? String(stage_payloads[:responses]["response_run_dir"]) : ""
+    response_summary = haskey(stage_payloads, :responses) ? String(stage_payloads[:responses]["response_summary"]) : ""
+    smape_unet = haskey(stage_payloads, :responses) ? stage_payloads[:responses]["smape_unet_vs_numerical"] : NaN
+    smape_gaussian = haskey(stage_payloads, :responses) ? stage_payloads[:responses]["smape_gaussian_vs_numerical"] : NaN
+
+    metrics_toml = layout.metrics_toml
     metrics_doc = Dict{String,Any}(
         "epoch" => epoch,
         "checkpoint_path" => abspath(checkpoint_path),
@@ -324,6 +464,7 @@ function run_eval_for_checkpoint!(cfg::Dict{String,Any},
         "avg_mode_kl_clipped" => avg_mode_kl,
         "global_kl" => global_kl,
         "smape_unet_vs_numerical" => smape_unet,
+        "smape_gaussian_vs_numerical" => smape_gaussian,
         "figures" => Dict(
             "figB" => isfile(figB) ? abspath(figB) : "",
             "figC" => isfile(figC) ? abspath(figC) : "",
@@ -336,23 +477,89 @@ function run_eval_for_checkpoint!(cfg::Dict{String,Any},
     )
     write_toml(metrics_toml, metrics_doc)
 
-    append_log(pipeline_log, "[eval] done epoch=$epoch avg_mode_kl=$(avg_mode_kl) smape_unet=$(smape_unet)")
+    pipeline_log = joinpath(dirs["logs"], "pipeline.log")
+    append_log(pipeline_log, "[eval] done epoch=$epoch avg_mode_kl=$(avg_mode_kl) smape_unet=$(smape_unet) smape_gaussian=$(smape_gaussian)")
 
     return Dict{String,Any}(
         "epoch" => epoch,
-        "tag" => eval_tag,
+        "tag" => layout.eval_tag,
         "checkpoint_path" => abspath(checkpoint_path),
-        "fig_dir" => eval_dir,
-        "figure_B" => isfile(figB) ? abspath(figB) : "",
-        "figure_C" => isfile(figC) ? abspath(figC) : "",
-        "figure_D" => isempty(figD) ? "" : abspath(figD),
+        "fig_dir" => layout.eval_dir,
+        "figure_B" => figB,
+        "figure_C" => figC,
+        "figure_D" => figD,
         "metrics_toml" => abspath(metrics_toml),
         "avg_mode_kl_clipped" => avg_mode_kl,
         "global_kl" => global_kl,
         "smape_unet_vs_numerical" => smape_unet,
+        "smape_gaussian_vs_numerical" => smape_gaussian,
         "response_run_dir" => response_run_dir,
         "response_summary" => response_summary,
     )
+end
+
+function maybe_finalize_epoch_row!(cfg::Dict{String,Any},
+    dirs::Dict{String,String},
+    required_stages::Vector{Symbol},
+    partial_by_epoch::Dict{Int,Dict{Symbol,Dict{String,Any}}},
+    rows_by_epoch::Dict{Int,Dict{String,Any}},
+    lock_state::ReentrantLock,
+    epoch::Int,
+    checkpoint_path::AbstractString,
+    stage::Symbol,
+    payload::Dict{String,Any})
+    ready_payloads = nothing
+    lock(lock_state) do
+        slot = get!(partial_by_epoch, epoch, Dict{Symbol,Dict{String,Any}}())
+        slot[stage] = payload
+        if all(s -> haskey(slot, s), required_stages)
+            ready_payloads = Dict{Symbol,Dict{String,Any}}(k => v for (k, v) in slot)
+            delete!(partial_by_epoch, epoch)
+        end
+    end
+
+    if ready_payloads !== nothing
+        row = compose_eval_row!(cfg, dirs, epoch, checkpoint_path, ready_payloads)
+        lock(lock_state) do
+            rows_by_epoch[epoch] = row
+        end
+    end
+    return nothing
+end
+
+function stage_worker_loop(stage::Symbol,
+    pending::Channel{Tuple{Int,String}},
+    cfg::Dict{String,Any},
+    effective_params::Dict{String,String},
+    dirs::Dict{String,String},
+    stage_workers::Dict{Symbol,Int},
+    required_stages::Vector{Symbol},
+    partial_by_epoch::Dict{Int,Dict{Symbol,Dict{String,Any}}},
+    rows_by_epoch::Dict{Int,Dict{String,Any}},
+    lock_state::ReentrantLock)
+    for (epoch, checkpoint_path) in pending
+        payload = if stage == :langevin
+            run_langevin_stage_for_checkpoint!(cfg, effective_params, dirs, stage_workers, epoch, checkpoint_path)
+        elseif stage == :responses
+            run_responses_stage_for_checkpoint!(cfg, effective_params, dirs, stage_workers, epoch, checkpoint_path)
+        else
+            error("Unknown stage: $stage")
+        end
+
+        maybe_finalize_epoch_row!(
+            cfg,
+            dirs,
+            required_stages,
+            partial_by_epoch,
+            rows_by_epoch,
+            lock_state,
+            epoch,
+            checkpoint_path,
+            stage,
+            payload,
+        )
+    end
+    return nothing
 end
 
 function save_figA(path::AbstractString,
@@ -366,6 +573,9 @@ function save_figA(path::AbstractString,
     eval_epochs = [Int(r["epoch"]) for r in eval_rows]
     eval_kls = [Float64(r["avg_mode_kl_clipped"]) for r in eval_rows]
     eval_smape = [Float64(get(r, "smape_unet_vs_numerical", NaN)) for r in eval_rows]
+    eval_smape_gaussian = [Float64(get(r, "smape_gaussian_vs_numerical", NaN)) for r in eval_rows]
+    gaussian_ref_vals = [v for v in eval_smape_gaussian if isfinite(v)]
+    gaussian_ref = isempty(gaussian_ref_vals) ? NaN : mean(gaussian_ref_vals)
 
     p1 = plot(epochs, losses;
         marker=:circle,
@@ -409,6 +619,9 @@ function save_figA(path::AbstractString,
         right_margin=5Plots.mm,
         top_margin=6Plots.mm,
         bottom_margin=8Plots.mm)
+    if isfinite(gaussian_ref)
+        hline!(p3, [gaussian_ref]; color=:gray25, linestyle=:dash, linewidth=1.7, label="sMAPE (Gaussian vs numerical)")
+    end
 
     fig = plot(p1, p2, p3;
         layout=(3, 1),
@@ -459,6 +672,7 @@ function write_run_summary(run_dir::AbstractString,
             "epochs" => [Int(r["epoch"]) for r in eval_rows],
             "avg_mode_kl_clipped" => [Float64(r["avg_mode_kl_clipped"]) for r in eval_rows],
             "smape_unet_vs_numerical" => [Float64(get(r, "smape_unet_vs_numerical", NaN)) for r in eval_rows],
+            "smape_gaussian_vs_numerical" => [Float64(get(r, "smape_gaussian_vs_numerical", NaN)) for r in eval_rows],
             "details" => [Dict{String,Any}(k => v for (k, v) in r) for r in eval_rows],
             "best_epoch" => best_idx > 0 ? Int(best["epoch"]) : -1,
             "best_avg_mode_kl_clipped" => best_idx > 0 ? Float64(best["avg_mode_kl_clipped"]) : NaN,
@@ -506,149 +720,223 @@ function main(args=ARGS)
     epochs = train_meta.epochs
     checkpoint_every = train_meta.checkpoint_every
 
-    train_cmd = `julia --project=. scripts/arnold/train_unet.jl --params $(effective_params["train"]) --run-dir $(abspath(run_info.run_dir)) --pipeline-mode true`
-    train_log = joinpath(dirs["logs"], "train.log")
-    train_proc, train_io = launch_logged(train_cmd, train_log)
-    append_log(pipeline_log, "training launched")
-
     checkpoint_dir = joinpath(dirs["model"], "checkpoints")
     final_model_path = joinpath(dirs["model"], "score_model.bson")
     training_metrics_csv = joinpath(dirs["figures_training"], "training_metrics.csv")
 
-    pending = Tuple{Int,String}[]
-    seen = Set{Int}()
+    required_stages = required_eval_stages(cfg)
+    stage_workers = Dict{Symbol,Int}()
+
+    pending_langevin = Channel{Tuple{Int,String}}(1024)
+    pending_responses = Channel{Tuple{Int,String}}(1024)
+
     rows_by_epoch = Dict{Int,Dict{String,Any}}()
+    partial_by_epoch = Dict{Int,Dict{Symbol,Dict{String,Any}}}()
     lock_state = ReentrantLock()
-    monitor_done = Ref(false)
+    monitor_task = nothing
+    worker_tasks = Task[]
+    train_proc = nothing
+    train_io = nothing
+    train_log = joinpath(dirs["logs"], "train.log")
 
-    monitor_task = @async begin
-        poll_s = cfg["resources.checkpoint_poll_seconds"]
-        eval_each = cfg["evaluation.evaluate_every_checkpoint"]
+    try
+        if cfg["evaluation.run_langevin"]
+            stage_workers[:langevin] = start_stage_worker(:langevin, joinpath(@__DIR__, "run_langevin.jl"))
+            append_log(pipeline_log, "persistent worker started stage=langevin pid=$(stage_workers[:langevin])")
+        end
+        if cfg["evaluation.run_responses"]
+            stage_workers[:responses] = start_stage_worker(
+                :responses,
+                joinpath(@__DIR__, "compute_responses.jl");
+                threads=cfg["resources.responses_threads"],
+            )
+            append_log(pipeline_log, "persistent worker started stage=responses pid=$(stage_workers[:responses]) threads=$(cfg["resources.responses_threads"])")
+        end
 
-        while true
-            ckpts = list_checkpoints(checkpoint_dir)
-            lock(lock_state) do
+        train_cmd = `julia --project=. scripts/arnold/train_unet.jl --params $(effective_params["train"]) --run-dir $(abspath(run_info.run_dir)) --pipeline-mode true`
+        train_proc, train_io = launch_logged(train_cmd, train_log)
+        append_log(pipeline_log, "training launched")
+
+        seen = Set{Int}()
+        monitor_task = @async begin
+            poll_s = cfg["resources.checkpoint_poll_seconds"]
+            eval_each = cfg["evaluation.evaluate_every_checkpoint"]
+
+            while true
+                ckpts = list_checkpoints(checkpoint_dir)
                 for (ep, path) in ckpts
                     if !(ep in seen)
                         push!(seen, ep)
                         if eval_each
-                            push!(pending, (ep, path))
+                            haskey(stage_workers, :langevin) && put!(pending_langevin, (ep, path))
+                            haskey(stage_workers, :responses) && put!(pending_responses, (ep, path))
                             append_log(pipeline_log, "queued checkpoint epoch=$ep path=$(abspath(path))")
                         end
                     end
                 end
+
+                Base.process_exited(train_proc) && break
+                sleep(poll_s)
             end
 
-            Base.process_exited(train_proc) && break
-            sleep(poll_s)
-        end
-
-        ckpts = list_checkpoints(checkpoint_dir)
-        lock(lock_state) do
+            ckpts = list_checkpoints(checkpoint_dir)
             for (ep, path) in ckpts
                 if !(ep in seen)
                     push!(seen, ep)
                     if cfg["evaluation.evaluate_every_checkpoint"]
-                        push!(pending, (ep, path))
+                        haskey(stage_workers, :langevin) && put!(pending_langevin, (ep, path))
+                        haskey(stage_workers, :responses) && put!(pending_responses, (ep, path))
                         append_log(pipeline_log, "queued checkpoint epoch=$ep path=$(abspath(path))")
                     end
                 end
             end
-            monitor_done[] = true
-        end
-        append_log(pipeline_log, "checkpoint monitor stopped")
-    end
 
-    worker_task = @async begin
-        queue_poll = cfg["resources.queue_poll_seconds"]
-        while true
-            item = nothing
-            stop = false
-            lock(lock_state) do
-                if !isempty(pending)
-                    item = popfirst!(pending)
-                elseif monitor_done[]
-                    stop = true
+            isopen(pending_langevin) && close(pending_langevin)
+            isopen(pending_responses) && close(pending_responses)
+            append_log(pipeline_log, "checkpoint monitor stopped")
+        end
+
+        if haskey(stage_workers, :langevin)
+            push!(
+                worker_tasks,
+                @async stage_worker_loop(
+                    :langevin,
+                    pending_langevin,
+                    cfg,
+                    effective_params,
+                    dirs,
+                    stage_workers,
+                    required_stages,
+                    partial_by_epoch,
+                    rows_by_epoch,
+                    lock_state,
+                )
+            )
+        end
+
+        if haskey(stage_workers, :responses)
+            push!(
+                worker_tasks,
+                @async stage_worker_loop(
+                    :responses,
+                    pending_responses,
+                    cfg,
+                    effective_params,
+                    dirs,
+                    stage_workers,
+                    required_stages,
+                    partial_by_epoch,
+                    rows_by_epoch,
+                    lock_state,
+                )
+            )
+        end
+
+        wait(monitor_task)
+        wait(train_proc)
+        close(train_io)
+        train_io = nothing
+        success(train_proc) || error("Training stage failed. See log: $train_log")
+        append_log(pipeline_log, "training completed")
+
+        for task in worker_tasks
+            wait(task)
+        end
+
+        eval_final = cfg["evaluation.evaluate_final_model"]
+        if eval_final
+            haskey(rows_by_epoch, epochs) || begin
+                isfile(final_model_path) || error("Final model not found at $final_model_path")
+                append_log(pipeline_log, "running final evaluation from final model epoch=$epochs")
+
+                stage_payloads = Dict{Symbol,Dict{String,Any}}()
+                if cfg["evaluation.run_langevin"]
+                    stage_payloads[:langevin] = run_langevin_stage_for_checkpoint!(cfg, effective_params, dirs, stage_workers, epochs, final_model_path)
+                end
+                if cfg["evaluation.run_responses"]
+                    stage_payloads[:responses] = run_responses_stage_for_checkpoint!(cfg, effective_params, dirs, stage_workers, epochs, final_model_path)
+                end
+                if !isempty(stage_payloads)
+                    rows_by_epoch[epochs] = compose_eval_row!(cfg, dirs, epochs, final_model_path, stage_payloads)
                 end
             end
+        end
 
-            if stop
-                break
-            elseif item === nothing
-                sleep(queue_poll)
-                continue
+        eval_rows = collect(values(rows_by_epoch))
+        sort!(eval_rows; by=r -> Int(r["epoch"]))
+
+        figA_path = save_figA(
+            joinpath(dirs["figures_training"], "figA_training_3panels.png"),
+            training_metrics_csv,
+            eval_rows;
+            target_kl=cfg["targets.target_avg_mode_kl"],
+            dpi=DEFAULT_DPI,
+        )
+
+        summary_path = write_run_summary(
+            run_info.run_dir,
+            Dict(
+                "pipeline" => joinpath(dirs["params"], "parameters_pipeline_used.toml"),
+                "train" => effective_params["train"],
+                "langevin" => effective_params["langevin"],
+                "responses" => effective_params["responses"],
+            ),
+            Dict{String,Any}(
+                "model_path" => final_model_path,
+                "state_path" => joinpath(dirs["model"], "training_state_latest.bson"),
+                "checkpoint_dir" => checkpoint_dir,
+                "training_metrics_csv" => training_metrics_csv,
+                "epochs" => epochs,
+                "checkpoint_every" => checkpoint_every,
+            ),
+            eval_rows,
+            figA_path,
+            cfg["targets.target_avg_mode_kl"],
+        )
+
+        if !isempty(eval_rows)
+            finite_kls = [Float64(r["avg_mode_kl_clipped"]) for r in eval_rows if isfinite(Float64(r["avg_mode_kl_clipped"]))]
+            if !isempty(finite_kls)
+                best_kl = minimum(finite_kls)
+                if best_kl > cfg["targets.target_avg_mode_kl"]
+                    append_log(pipeline_log, "warning best_avg_mode_kl=$best_kl above target=$(cfg["targets.target_avg_mode_kl"])")
+                end
             end
+        end
 
-            epoch, ckpt = item
-            row = run_eval_for_checkpoint!(cfg, effective_params, dirs, epoch, ckpt)
-            lock(lock_state) do
-                rows_by_epoch[epoch] = row
+        append_log(pipeline_log, "summary=$(abspath(summary_path))")
+        append_log(pipeline_log, "pipeline done")
+
+        println("run_dir=$(abspath(run_info.run_dir))")
+        println("summary=$(abspath(summary_path))")
+    finally
+        isopen(pending_langevin) && close(pending_langevin)
+        isopen(pending_responses) && close(pending_responses)
+
+        for task in worker_tasks
+            if !istaskdone(task)
+                try
+                    wait(task)
+                catch
+                end
             end
         end
-    end
 
-    wait(monitor_task)
-    wait(train_proc)
-    close(train_io)
-    success(train_proc) || error("Training stage failed. See log: $train_log")
-    append_log(pipeline_log, "training completed")
-
-    wait(worker_task)
-
-    eval_final = cfg["evaluation.evaluate_final_model"]
-    if eval_final
-        haskey(rows_by_epoch, epochs) || begin
-            isfile(final_model_path) || error("Final model not found at $final_model_path")
-            append_log(pipeline_log, "running final evaluation from final model epoch=$epochs")
-            row = run_eval_for_checkpoint!(cfg, effective_params, dirs, epochs, final_model_path)
-            rows_by_epoch[epochs] = row
+        if train_proc !== nothing && Base.process_running(train_proc)
+            try
+                kill(train_proc)
+            catch
+            end
         end
-    end
-
-    eval_rows = collect(values(rows_by_epoch))
-    sort!(eval_rows; by=r -> Int(r["epoch"]))
-
-    figA_path = save_figA(
-        joinpath(dirs["figures_training"], "figA_training_3panels.png"),
-        training_metrics_csv,
-        eval_rows;
-        target_kl=cfg["targets.target_avg_mode_kl"],
-        dpi=DEFAULT_DPI,
-    )
-
-    summary_path = write_run_summary(
-        run_info.run_dir,
-        Dict(
-            "pipeline" => joinpath(dirs["params"], "parameters_pipeline_used.toml"),
-            "train" => effective_params["train"],
-            "langevin" => effective_params["langevin"],
-            "responses" => effective_params["responses"],
-        ),
-        Dict{String,Any}(
-            "model_path" => final_model_path,
-            "state_path" => joinpath(dirs["model"], "training_state_latest.bson"),
-            "checkpoint_dir" => checkpoint_dir,
-            "training_metrics_csv" => training_metrics_csv,
-            "epochs" => epochs,
-            "checkpoint_every" => checkpoint_every,
-        ),
-        eval_rows,
-        figA_path,
-        cfg["targets.target_avg_mode_kl"],
-    )
-
-    if !isempty(eval_rows)
-        best_kl = minimum(Float64(r["avg_mode_kl_clipped"]) for r in eval_rows if isfinite(Float64(r["avg_mode_kl_clipped"])))
-        if isfinite(best_kl) && best_kl > cfg["targets.target_avg_mode_kl"]
-            append_log(pipeline_log, "warning best_avg_mode_kl=$best_kl above target=$(cfg["targets.target_avg_mode_kl"])")
+        if train_io !== nothing
+            try
+                close(train_io)
+            catch
+            end
         end
+
+        stop_stage_workers!(stage_workers, pipeline_log)
     end
-
-    append_log(pipeline_log, "summary=$(abspath(summary_path))")
-    append_log(pipeline_log, "pipeline done")
-
-    println("run_dir=$(abspath(run_info.run_dir))")
-    println("summary=$(abspath(summary_path))")
 end
 
 if abspath(PROGRAM_FILE) == @__FILE__

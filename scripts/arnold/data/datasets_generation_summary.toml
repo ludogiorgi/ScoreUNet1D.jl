@@ -1,32 +1,46 @@
-roles_requested = ["train_stochastic", "gfdt_stochastic"]
+roles_requested = ["two_scale_observed", "train_stochastic", "gfdt_stochastic"]
 parameters_data_path = "/home/ludogio/Documents/JuliaProjects/ScoreUNet1D.jl/scripts/arnold/parameters_data.toml"
 datasets_hdf5 = "/home/ludogio/Documents/JuliaProjects/ScoreUNet1D.jl/scripts/arnold/data/l96_arnold_datasets.hdf5"
 
 [closure_used]
-sigma = 0.467
+sigma = 2.5
 alpha2 = -0.0136
 alpha1 = 1.3
-alpha3 = 0.00235
+alpha3 = -0.00235
 alpha0 = 0.341
 
 [closure_meta]
-theta_initial = [0.341, 1.3, -0.0136, 0.00235, 0.467]
-theta_used = [0.341, 1.3, -0.0136, 0.00235, 0.467]
+theta_initial = [0.341, 1.3, -0.0136, -0.00235, 2.5]
+theta_used = [0.341, 1.3, -0.0136, -0.00235, 2.5]
 mode = "initial_only"
 fit_start_index = 0
 fit_dataset_role = ""
 fit_samples = 0
 
+[figures]
+max_acf_lag = 200
+pdf_bins = 80
+stochastic_role = "train_stochastic"
+figB_stats_dataset_compare_4x2 = "/home/ludogio/Documents/JuliaProjects/ScoreUNet1D.jl/scripts/arnold/data/figB_stats_dataset_compare_4x2.png"
+deterministic_role = "two_scale_observed"
+
 [datasets.gfdt_stochastic]
 key = "x_gfdt_stochastic"
 role = "gfdt_stochastic"
-signature = "7e3817026b1ccd54052f7cdfe69c65cd900c48f2"
+signature = "3aab1cd8114ad5525905aa2743186662a9616f6b"
 generated = true
 path = "/home/ludogio/Documents/JuliaProjects/ScoreUNet1D.jl/scripts/arnold/data/l96_arnold_datasets.hdf5"
 
 [datasets.train_stochastic]
 key = "x_train_stochastic"
 role = "train_stochastic"
-signature = "2d37e959aa1604356686e16d9edcb6da54d40237"
+signature = "b71c912ce4d026b256189af5cb25fc1d40250dc4"
 generated = true
+path = "/home/ludogio/Documents/JuliaProjects/ScoreUNet1D.jl/scripts/arnold/data/l96_arnold_datasets.hdf5"
+
+[datasets.two_scale_observed]
+key = "x_two_scale_observed"
+role = "two_scale_observed"
+signature = "0f42bb08243c4d06ec2c157ee38d4ef6585914d6"
+generated = false
 path = "/home/ludogio/Documents/JuliaProjects/ScoreUNet1D.jl/scripts/arnold/data/l96_arnold_datasets.hdf5"

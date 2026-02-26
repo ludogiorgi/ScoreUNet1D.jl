@@ -1,0 +1,48 @@
+[paths]
+dataset_path = "scripts/arnold/_smoke/l96_x_train_smoke.hdf5"
+data_params = "/home/ludogio/Documents/JuliaProjects/ScoreUNet1D.jl/scripts/arnold/_smoke/runs/run_006/params/parameters_data_used.toml"
+dataset_key = "x_timeseries"
+
+[data]
+c = 10.0
+nsamples = 5000
+b = 10.0
+dt = 0.005
+h = 1.0
+stochastic_x_noise = false
+spinup_steps = 2000
+process_noise_sigma = 0.0
+rng_seed = 101
+J = 32
+save_every = 50
+target_spacing = 0.25
+K = 8
+F = 20.0
+
+[train]
+lr = 0.001
+use_lr_schedule = false
+min_lr_factor = 0.1
+loss_y_weight = 1.0
+resume_enabled = false
+batch_size = 128
+ema_enabled = true
+loss_mean_weight = 0.0
+sigma = 0.05
+device = "GPU:0"
+normalization_mode = "per_channel"
+progress = false
+norm_type = "group"
+loss_cov_weight = 0.0
+norm_groups = 4
+base_channels = 16
+ema_use_for_eval = true
+save_state_every = 1
+epochs = 2
+channel_multipliers = [1, 2]
+loss_x_weight = 1.0
+checkpoint_every = 1
+resume_state_path = ""
+seed = 3
+ema_decay = 0.999
+warmup_steps = 0

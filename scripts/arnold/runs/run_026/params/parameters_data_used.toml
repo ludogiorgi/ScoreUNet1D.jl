@@ -1,0 +1,50 @@
+[paths]
+datasets_hdf5 = "scripts/arnold/data/l96_arnold_datasets.hdf5"
+
+[twoscale]
+K = 8
+J = 32
+F = 20.0
+h = 1.0
+c = 10.0
+b = 10.0
+dt = 0.005
+process_noise_sigma = 0.0
+stochastic_x_noise = false
+
+[closure]
+F = 20.0
+# alpha^(0) coefficients used as first guess and in phi6 Itô balance observable.
+alpha0_initial = 0.341
+alpha1_initial = 1.30
+alpha2_initial = -0.0136
+alpha3_initial = 0.00235
+sigma_initial = 0.467
+# If true, fit (alpha0..alpha3,sigma) against the bi-scale dataset by regression.
+auto_fit = true
+fit_dataset_role = "two_scale_observed"
+fit_start_index = 2
+fit_samples = 50000
+fit_min_samples = 500
+
+[datasets.two_scale_observed]
+key = "x_two_scale_observed"
+spinup_steps = 2_000
+save_every = 200
+nsamples = 200_000
+rng_seed = 101
+
+[datasets.train_stochastic]
+key = "x_train_stochastic"
+spinup_steps = 2_000
+save_every = 200
+nsamples = 200_000
+rng_seed = 11
+target_spacing = 1.0
+
+[datasets.gfdt_stochastic]
+key = "x_gfdt_stochastic"
+spinup_steps = 2_000
+save_every = 2
+nsamples = 100_000
+rng_seed = 777

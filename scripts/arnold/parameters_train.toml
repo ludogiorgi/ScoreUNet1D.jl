@@ -9,8 +9,8 @@ target_spacing = 1.0
 [train]
 device = "GPU:0"
 seed = 42
-epochs = 180
-batch_size = 128
+epochs = 100
+batch_size = 512
 lr = 0.0008
 sigma = 0.05
 base_channels = 32
@@ -27,8 +27,8 @@ ema_enabled = true
 ema_decay = 0.999
 ema_use_for_eval = true
 
-checkpoint_every = 60
-save_state_every = 60
+checkpoint_every = 10
+save_state_every = 10
 
 resume_enabled = false
 resume_state_path = ""

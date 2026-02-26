@@ -8,6 +8,7 @@ if get(ENV, "GKSwstype", "") == ""
 end
 
 using BSON
+using CUDA
 using FFTW
 using Flux
 using HDF5
@@ -182,6 +183,7 @@ function load_config(path::AbstractString)
         "numerical.max_abs_state" => as_float(numerical, "max_abs_state", 80.0),
         "numerical.min_valid_fraction" => as_float(numerical, "min_valid_fraction", 0.8),
         "numerical.max_h_shrinks" => as_int(numerical, "max_h_shrinks", 6),
+        "numerical.thread_chunk_size" => as_int(numerical, "thread_chunk_size", 256),
         "numerical.h_shrink_factor" => as_float(numerical, "h_shrink_factor", 0.5), "figures.dpi" => as_int(figures, "dpi", 180),
         "cache.force_regenerate" => as_bool(cache, "force_regenerate", false),
     )
@@ -193,6 +195,7 @@ function load_config(path::AbstractString)
     cfg["numerical.max_abs_state"] > 0.0 || error("numerical.max_abs_state must be > 0")
     0.0 <= cfg["numerical.min_valid_fraction"] <= 1.0 || error("numerical.min_valid_fraction must be in [0,1]")
     cfg["numerical.max_h_shrinks"] >= 0 || error("numerical.max_h_shrinks must be >= 0")
+    cfg["numerical.thread_chunk_size"] >= 1 || error("numerical.thread_chunk_size must be >= 1")
     0.0 < cfg["numerical.h_shrink_factor"] < 1.0 || error("numerical.h_shrink_factor must be in (0,1)")
 
     return cfg, doc
@@ -402,6 +405,15 @@ function resolve_device(name::AbstractString)
     end
 end
 
+function reclaim_device_memory!()
+    GC.gc(true)
+    try
+        CUDA.reclaim()
+    catch
+    end
+    return nothing
+end
+
 function load_unet_bundle(checkpoint_path::AbstractString, device_pref::AbstractString, forward_mode::AbstractString)
     isfile(checkpoint_path) || error("Checkpoint not found: $checkpoint_path")
     contents = BSON.load(checkpoint_path)
@@ -557,103 +569,110 @@ function unet_conjugates(
     divergence_eps::Float64,
     divergence_probes::Int,
     divergence_seed::Int=12345)
-    bundle = load_unet_bundle(checkpoint_path, score_device, score_forward_mode)
-    K, N = size(X)
+    reclaim_device_memory!()
+    bundle = nothing
+    try
+        bundle = load_unet_bundle(checkpoint_path, score_device, score_forward_mode)
+        K, N = size(X)
 
-    score_raw = zeros(Float64, K, N)
-    M_acc = zeros(Float64, K, K)
+        score_raw = zeros(Float64, K, N)
+        M_acc = zeros(Float64, K, K)
 
-    mean_lc = permutedims(bundle.stats.mean, (2, 1))
-    std_lc = permutedims(bundle.stats.std, (2, 1))
-    mu_vec = Float64.(vec(mean_lc[1:K, 1]))
-    std_vec = Float64.(vec(std_lc))
+        mean_lc = permutedims(bundle.stats.mean, (2, 1))
+        std_lc = permutedims(bundle.stats.std, (2, 1))
+        mu_vec = Float64.(vec(mean_lc[1:K, 1]))
+        std_vec = Float64.(vec(std_lc))
 
-    for start in 1:batch_size:N
-        stop = min(start + batch_size - 1, N)
-        idx = start:stop
-        xb = X[:, idx]
-
-        s_phys = unet_score_phys_batch(bundle, xb)
-        score_raw[:, idx] .= s_phys
-
-        z = (xb .- mu_vec) ./ std_vec
-        s_norm = s_phys .* std_vec
-        M_acc .+= -(z * s_norm')
-    end
-
-    M_raw = M_acc ./ max(N, 1)
-    Tcorr, corr_stats = if apply_correction
-        build_correction(M_raw)
-    else
-        Matrix{Float64}(I, K, K), Dict{String,Any}("solver" => "disabled")
-    end
-
-    score_corr = if apply_correction
-        score_norm = score_raw .* std_vec
-        (Tcorr' * score_norm) ./ std_vec
-    else
-        score_raw
-    end
-
-    score_fun_raw = x -> unet_score_phys_batch(bundle, x)
-    score_fun_corr = if apply_correction
-        x -> begin
-            s = unet_score_phys_batch(bundle, x)
-            s_norm = s .* std_vec
-            (Tcorr' * s_norm) ./ std_vec
-        end
-    else
-        score_fun_raw
-    end
-
-    rng = MersenneTwister(divergence_seed)
-
-    div_raw = zeros(Float64, N)
-    div_corr = zeros(Float64, N)
-
-    if divergence_mode == "exact"
-        Tcorr_transpose = apply_correction ? Matrix(Tcorr') : nothing
         for start in 1:batch_size:N
             stop = min(start + batch_size - 1, N)
             idx = start:stop
-            d_raw, d_corr = estimate_divergence_exact(bundle, X[:, idx], Tcorr_transpose)
-            div_raw[idx] .= d_raw
-            if apply_correction
-                div_corr[idx] .= d_corr
-            end
-        end
-        if !apply_correction
-            div_corr .= div_raw
-        end
-    else
-        div_raw = if divergence_mode == "fd_axis"
-            estimate_divergence_fd_axis(score_fun_raw, X; eps=divergence_eps)
-        else
-            estimate_divergence_hutchinson(score_fun_raw, X; eps=divergence_eps, n_probes=divergence_probes, rng=rng)
+            xb = X[:, idx]
+
+            s_phys = unet_score_phys_batch(bundle, xb)
+            score_raw[:, idx] .= s_phys
+
+            z = (xb .- mu_vec) ./ std_vec
+            s_norm = s_phys .* std_vec
+            M_acc .+= -(z * s_norm')
         end
 
-        div_corr = if apply_correction
-            if divergence_mode == "fd_axis"
-                estimate_divergence_fd_axis(score_fun_corr, X; eps=divergence_eps)
+        M_raw = M_acc ./ max(N, 1)
+        Tcorr, corr_stats = if apply_correction
+            build_correction(M_raw)
+        else
+            Matrix{Float64}(I, K, K), Dict{String,Any}("solver" => "disabled")
+        end
+
+        score_corr = if apply_correction
+            score_norm = score_raw .* std_vec
+            (Tcorr' * score_norm) ./ std_vec
+        else
+            score_raw
+        end
+
+        score_fun_raw = x -> unet_score_phys_batch(bundle, x)
+        score_fun_corr = if apply_correction
+            x -> begin
+                s = unet_score_phys_batch(bundle, x)
+                s_norm = s .* std_vec
+                (Tcorr' * s_norm) ./ std_vec
+            end
+        else
+            score_fun_raw
+        end
+
+        rng = MersenneTwister(divergence_seed)
+
+        div_raw = zeros(Float64, N)
+        div_corr = zeros(Float64, N)
+
+        if divergence_mode == "exact"
+            Tcorr_transpose = apply_correction ? Matrix(Tcorr') : nothing
+            for start in 1:batch_size:N
+                stop = min(start + batch_size - 1, N)
+                idx = start:stop
+                d_raw, d_corr = estimate_divergence_exact(bundle, X[:, idx], Tcorr_transpose)
+                div_raw[idx] .= d_raw
+                if apply_correction
+                    div_corr[idx] .= d_corr
+                end
+            end
+            if !apply_correction
+                div_corr .= div_raw
+            end
+        else
+            div_raw = if divergence_mode == "fd_axis"
+                estimate_divergence_fd_axis(score_fun_raw, X; eps=divergence_eps)
             else
-                estimate_divergence_hutchinson(score_fun_corr, X; eps=divergence_eps, n_probes=divergence_probes, rng=rng)
+                estimate_divergence_hutchinson(score_fun_raw, X; eps=divergence_eps, n_probes=divergence_probes, rng=rng)
             end
-        else
-            div_raw
+
+            div_corr = if apply_correction
+                if divergence_mode == "fd_axis"
+                    estimate_divergence_fd_axis(score_fun_corr, X; eps=divergence_eps)
+                else
+                    estimate_divergence_hutchinson(score_fun_corr, X; eps=divergence_eps, n_probes=divergence_probes, rng=rng)
+                end
+            else
+                div_raw
+            end
         end
+
+        G_raw = compute_conjugates_from_score(X, score_raw, div_raw, sigma_param)
+        G_corr = compute_conjugates_from_score(X, score_corr, div_corr, sigma_param)
+
+        return (
+            G_raw=G_raw,
+            G_corr=G_corr,
+            correction_stats=corr_stats,
+            correction_matrix=Tcorr,
+            raw_identity_matrix=M_raw,
+            score_device_name=bundle.device_name,
+        )
+    finally
+        bundle = nothing
+        reclaim_device_memory!()
     end
-
-    G_raw = compute_conjugates_from_score(X, score_raw, div_raw, sigma_param)
-    G_corr = compute_conjugates_from_score(X, score_corr, div_corr, sigma_param)
-
-    return (
-        G_raw=G_raw,
-        G_corr=G_corr,
-        correction_stats=corr_stats,
-        correction_matrix=Tcorr,
-        raw_identity_matrix=M_raw,
-        score_device_name=bundle.device_name,
-    )
 end
 
 function observable_reference(cfg::Dict{String,Any})
@@ -742,6 +761,7 @@ function compute_numerical_responses(
     max_abs_state = cfg["numerical.max_abs_state"]
     min_valid_fraction = cfg["numerical.min_valid_fraction"]
     max_h_shrinks = cfg["numerical.max_h_shrinks"]
+    thread_chunk_size = cfg["numerical.thread_chunk_size"]
     h_shrink_factor = cfg["numerical.h_shrink_factor"]
     obs_ref = observable_reference(cfg)
 
@@ -783,53 +803,57 @@ function compute_numerical_responses(
                 valid_locals[tid] = 0
             end
 
-            Threads.@threads for ens in 1:n_ens
-                tid = threadid()
-                part = partials[tid]
-                wk = workspaces[tid]
+            chunk_size = min(thread_chunk_size, n_ens)
+            for ens_start in 1:chunk_size:n_ens
+                ens_stop = min(ens_start + chunk_size - 1, n_ens)
+                Threads.@threads :static for ens in ens_start:ens_stop
+                    tid = threadid()
+                    part = partials[tid]
+                    wk = workspaces[tid]
 
-                @inbounds wk.x0 .= view(init_states, :, ens)
-                seed = seed_base + 1_000_000 * ip + ens
+                    @inbounds wk.x0 .= view(init_states, :, ens)
+                    seed = seed_base + 1_000_000 * ip + ens
 
-                Random.seed!(wk.rng, seed)
-                ok_p = simulate_observable_series!(
-                    wk.out_p,
-                    wk.x0,
-                    theta_p,
-                    cfg["closure.F"],
-                    cfg["integration.dt"],
-                    cfg["integration.save_every"],
-                    n_lags,
-                    obs_ref,
-                    max_abs_state,
-                    wk.ws,
-                    wk.rng,
-                    wk.x,
-                )
+                    Random.seed!(wk.rng, seed)
+                    ok_p = simulate_observable_series!(
+                        wk.out_p,
+                        wk.x0,
+                        theta_p,
+                        cfg["closure.F"],
+                        cfg["integration.dt"],
+                        cfg["integration.save_every"],
+                        n_lags,
+                        obs_ref,
+                        max_abs_state,
+                        wk.ws,
+                        wk.rng,
+                        wk.x,
+                    )
 
-                Random.seed!(wk.rng, seed)
-                ok_m = simulate_observable_series!(
-                    wk.out_m,
-                    wk.x0,
-                    theta_m,
-                    cfg["closure.F"],
-                    cfg["integration.dt"],
-                    cfg["integration.save_every"],
-                    n_lags,
-                    obs_ref,
-                    max_abs_state,
-                    wk.ws,
-                    wk.rng,
-                    wk.x,
-                )
+                    Random.seed!(wk.rng, seed)
+                    ok_m = simulate_observable_series!(
+                        wk.out_m,
+                        wk.x0,
+                        theta_m,
+                        cfg["closure.F"],
+                        cfg["integration.dt"],
+                        cfg["integration.save_every"],
+                        n_lags,
+                        obs_ref,
+                        max_abs_state,
+                        wk.ws,
+                        wk.rng,
+                        wk.x,
+                    )
 
-                if !(ok_p && ok_m)
-                    continue
-                end
+                    if !(ok_p && ok_m)
+                        continue
+                    end
 
-                valid_locals[tid] += 1
-                @inbounds for m in 1:N_OBS, lag in 1:(n_lags+1)
-                    part[m, lag] += (wk.out_p[m, lag] - wk.out_m[m, lag]) / (2h)
+                    valid_locals[tid] += 1
+                    @inbounds for m in 1:N_OBS, lag in 1:(n_lags+1)
+                        part[m, lag] += (wk.out_p[m, lag] - wk.out_m[m, lag]) / (2h)
+                    end
                 end
             end
 
@@ -901,6 +925,7 @@ function compute_steady_state_observables(theta::NTuple{5,Float64},
     accum = zeros(Float64, N_OBS)
     collected = 0
     restarts = 0
+    consecutive_restarts = 0
     max_restarts = 10_000
 
     while collected < n_samples
@@ -909,6 +934,7 @@ function compute_steady_state_observables(theta::NTuple{5,Float64},
         end
 
         stable = true
+        collected_before = collected
         for _ in 1:spinup
             l96_reduced_step!(x, dt, F, a0, a1, a2, a3, ws)
             add_reduced_noise!(x, rng, sig, dt)
@@ -920,7 +946,8 @@ function compute_steady_state_observables(theta::NTuple{5,Float64},
 
         if !stable
             restarts += 1
-            if restarts > max_restarts
+            consecutive_restarts += 1
+            if consecutive_restarts > max_restarts
                 error("Steady-state integration exceeded restart budget during spinup (seed=$seed, n_samples=$n_samples)")
             end
             continue
@@ -957,9 +984,17 @@ function compute_steady_state_observables(theta::NTuple{5,Float64},
 
         if !stable
             restarts += 1
-            if restarts > max_restarts
+            if collected > collected_before
+                # We made progress before destabilization; treat as non-consecutive failure.
+                consecutive_restarts = 0
+            else
+                consecutive_restarts += 1
+            end
+            if consecutive_restarts > max_restarts
                 error("Steady-state integration exceeded restart budget during averaging (seed=$seed, n_samples=$n_samples)")
             end
+        else
+            consecutive_restarts = 0
         end
     end
 
@@ -969,27 +1004,56 @@ function compute_steady_state_observables(theta::NTuple{5,Float64},
     return accum ./ n_samples
 end
 
+function _is_restart_budget_error(err)
+    msg = lowercase(sprint(showerror, err))
+    return occursin("restart budget", msg)
+end
+
 function compute_numerical_jacobians(theta::NTuple{5,Float64}, cfg::Dict{String,Any})
     h_abs = cfg["numerical.h_abs"]
     h_rel = cfg["numerical.h_rel"]
+    h_shrink_factor = cfg["numerical.h_shrink_factor"]
+    max_h_shrinks = cfg["numerical.max_h_shrinks"]
     seed_base = cfg["numerical.seed_base"] + 50_000_000
 
     J = zeros(Float64, N_OBS, N_PARAM)
 
     Threads.@threads for ip in 1:N_PARAM
         h = max(h_abs[ip], h_rel * max(abs(theta[ip]), 1.0))
-        tp = collect(theta)
-        tm = collect(theta)
-        tp[ip] += h
-        tm[ip] -= h
-        theta_p = (tp[1], tp[2], tp[3], tp[4], tp[5])
-        theta_m = (tm[1], tm[2], tm[3], tm[4], tm[5])
+        accepted = false
+        last_err = ""
+        for attempt in 0:max_h_shrinks
+            tp = collect(theta)
+            tm = collect(theta)
+            tp[ip] += h
+            tm[ip] -= h
+            theta_p = (tp[1], tp[2], tp[3], tp[4], tp[5])
+            theta_m = (tm[1], tm[2], tm[3], tm[4], tm[5])
 
-        seed = seed_base + 1000 * ip
-        @info "Computing high-precision asymptotic FD Jacobian column" parameter = PARAM_NAMES[ip] h = h n_samples = ASYMPTOTIC_FD_NSAMPLES spinup = ASYMPTOTIC_FD_SPINUP seed = seed
-        avg_p = compute_steady_state_observables(theta_p, cfg, ASYMPTOTIC_FD_NSAMPLES, ASYMPTOTIC_FD_SPINUP, seed)
-        avg_m = compute_steady_state_observables(theta_m, cfg, ASYMPTOTIC_FD_NSAMPLES, ASYMPTOTIC_FD_SPINUP, seed)
-        @views J[:, ip] .= (avg_p .- avg_m) ./ (2h)
+            seed = seed_base + 1000 * ip + 100_000 * attempt
+            @info "Computing high-precision asymptotic FD Jacobian column" parameter = PARAM_NAMES[ip] h = h n_samples = ASYMPTOTIC_FD_NSAMPLES spinup = ASYMPTOTIC_FD_SPINUP seed = seed attempt = attempt + 1
+            try
+                avg_p = compute_steady_state_observables(theta_p, cfg, ASYMPTOTIC_FD_NSAMPLES, ASYMPTOTIC_FD_SPINUP, seed)
+                avg_m = compute_steady_state_observables(theta_m, cfg, ASYMPTOTIC_FD_NSAMPLES, ASYMPTOTIC_FD_SPINUP, seed)
+                col = (avg_p .- avg_m) ./ (2h)
+                all(isfinite, col) || error("Asymptotic FD Jacobian column has non-finite values for parameter $(PARAM_NAMES[ip])")
+                @views J[:, ip] .= col
+                accepted = true
+                break
+            catch err
+                last_err = sprint(showerror, err)
+                if !_is_restart_budget_error(err)
+                    rethrow(err)
+                end
+                if attempt == max_h_shrinks
+                    break
+                end
+                @warn "Retrying high-precision asymptotic FD Jacobian with smaller perturbation step" parameter = PARAM_NAMES[ip] attempt = attempt + 1 h = h reason = last_err
+                h *= h_shrink_factor
+            end
+        end
+
+        accepted || error("Asymptotic FD Jacobian failed for parameter $(PARAM_NAMES[ip]) after $(max_h_shrinks + 1) attempts. Last error: $last_err")
     end
 
     all(isfinite, J) || error("Asymptotic finite-difference Jacobian contains non-finite values")
@@ -1089,6 +1153,7 @@ function response_signature(cfg::Dict{String,Any})
             "max_abs_state" => cfg["numerical.max_abs_state"],
             "min_valid_fraction" => cfg["numerical.min_valid_fraction"],
             "max_h_shrinks" => cfg["numerical.max_h_shrinks"],
+            "thread_chunk_size" => cfg["numerical.thread_chunk_size"],
             "h_shrink_factor" => cfg["numerical.h_shrink_factor"],
         ),
     ))
@@ -1104,7 +1169,7 @@ end
 function write_baseline_cache(path::AbstractString, signature::AbstractString, payload)
     mkpath(dirname(path))
     h5open(path, "w") do h5
-        attrs = attributes(h5)
+        attrs = HDF5.attributes(h5)
         attrs["signature"] = signature
         attrs["generated_at"] = string(now())
         attrs["h_used"] = payload.h_used
@@ -1133,18 +1198,25 @@ end
 function load_baseline_cache(path::AbstractString, signature::AbstractString; response_kind::String)
     isfile(path) || error("Baseline cache not found: $path")
     return h5open(path, "r") do h5
-        attrs = attributes(h5)
+        attrs = HDF5.attributes(h5)
         haskey(attrs, "signature") || error("Cache file missing signature")
         stored = String(read(attrs["signature"]))
         stored == signature || error("Cache signature mismatch")
 
         times = Float64.(read(h5["times_out"]))
-        bucket = response_kind == "impulse" ? "impulse" : "heaviside"
-        grp = h5[joinpath("responses", bucket)]
-        out = Dict{String,Array{Float64,3}}()
-        for key in keys(grp)
-            out[String(key)] = Float64.(read(grp[key]))
+        responses_heaviside = Dict{String,Array{Float64,3}}()
+        responses_impulse = Dict{String,Array{Float64,3}}()
+
+        grp_heaviside = h5[joinpath("responses", "heaviside")]
+        for key in keys(grp_heaviside)
+            responses_heaviside[String(key)] = Float64.(read(grp_heaviside[key]))
         end
+        grp_impulse = h5[joinpath("responses", "impulse")]
+        for key in keys(grp_impulse)
+            responses_impulse[String(key)] = Float64.(read(grp_impulse[key]))
+        end
+
+        out = response_kind == "impulse" ? responses_impulse : responses_heaviside
 
         h_used = haskey(attrs, "h_used") ? Float64.(read(attrs["h_used"])) : fill(NaN, N_PARAM)
         valid_fraction = haskey(attrs, "valid_fraction") ? Float64.(read(attrs["valid_fraction"])) : fill(NaN, N_PARAM)
@@ -1154,6 +1226,8 @@ function load_baseline_cache(path::AbstractString, signature::AbstractString; re
         return (
             times=times,
             responses=out,
+            responses_heaviside=responses_heaviside,
+            responses_impulse=responses_impulse,
             h_used=h_used,
             numerical_diag=Dict{String,Any}(
                 "valid_fraction" => valid_fraction,
@@ -1175,7 +1249,7 @@ end
 function cache_matches(path::AbstractString, signature::AbstractString)
     isfile(path) || return false
     return h5open(path, "r") do h5
-        attrs = attributes(h5)
+        attrs = HDF5.attributes(h5)
         haskey(attrs, "signature") || return false
         stored = try
             String(read(attrs["signature"]))
@@ -1262,6 +1336,7 @@ end
 function save_response_figure(path::AbstractString,
     times::Vector{Float64},
     curves::Vector{NamedTuple};
+    asymptotic_curves::Union{Nothing,Vector{NamedTuple}}=nothing,
     title_text::String,
     dpi::Int)
     isempty(curves) && return ""
@@ -1269,12 +1344,27 @@ function save_response_figure(path::AbstractString,
     R0 = curves[1].data
     m, p, nt = size(R0)
     nt == length(times) || error("Curve time dimension mismatch")
-    asymptotic_by_curve = [(;
-        label=c.label,
-        color=c.color,
-        linestyle=c.linestyle,
-        jacobians=extract_asymptotic_jacobians(times, c.data),
-    ) for c in curves]
+    asymptotic_by_curve = if asymptotic_curves === nothing
+        [(;
+            label=c.label,
+            color=c.color,
+            linestyle=c.linestyle,
+            jacobians=extract_asymptotic_jacobians(times, c.data),
+        ) for c in curves]
+    else
+        out = NamedTuple[]
+        for c in asymptotic_curves
+            size(c.jacobians, 1) == m || error("Asymptotic Jacobian row mismatch for $(c.label)")
+            size(c.jacobians, 2) == p || error("Asymptotic Jacobian column mismatch for $(c.label)")
+            push!(out, (;
+                label=c.label,
+                color=c.color,
+                linestyle=c.linestyle,
+                jacobians=c.jacobians,
+            ))
+        end
+        out
+    end
 
     default(fontfamily="Computer Modern", dpi=dpi, legendfontsize=8, guidefontsize=9, tickfontsize=8, titlefontsize=10)
     panels = Vector{Plots.Plot}(undef, m * p)
@@ -1301,6 +1391,22 @@ function save_response_figure(path::AbstractString,
     mkpath(dirname(path))
     savefig(fig, path)
     return path
+end
+
+function build_asymptotic_curves(curves::Vector{NamedTuple},
+    jacobian_asymptotes::Dict{String,Matrix{Float64}})
+    out = NamedTuple[]
+    for c in curves
+        key = String(c.method_key)
+        haskey(jacobian_asymptotes, key) || continue
+        push!(out, (;
+            label=c.label,
+            color=c.color,
+            linestyle=c.linestyle,
+            jacobians=jacobian_asymptotes[key],
+        ))
+    end
+    return out
 end
 
 function write_responses_hdf5(path::AbstractString,
@@ -1365,6 +1471,8 @@ function main(args=ARGS)
 
     times_out = baseline.times
     responses = Dict{String,Array{Float64,3}}()
+    heaviside_responses = baseline.responses_heaviside
+    unet_step_responses = Dict{String,Array{Float64,3}}()
 
     if cfg["methods.gaussian"]
         if cfg["methods.apply_score_correction"]
@@ -1424,15 +1532,20 @@ function main(args=ARGS)
         C_u_raw, R_u_raw_step, times_native = build_gfdt_response(A, unet.G_raw, dt_obs, n_lags; mean_center=cfg["gfdt.mean_center"])
         C_u_corr, R_u_corr_step, _ = build_gfdt_response(A, unet.G_corr, dt_obs, n_lags; mean_center=cfg["gfdt.mean_center"])
 
+        R_u_raw_step_out = linear_interpolate_3d_time(R_u_raw_step, times_native, times_out)
+        R_u_corr_step_out = linear_interpolate_3d_time(R_u_corr_step, times_native, times_out)
+        unet_step_responses["gfdt_unet_raw"] = R_u_raw_step_out
+        unet_step_responses["gfdt_unet_corrected"] = R_u_corr_step_out
+
         R_u_raw = if cfg["methods.response_kind"] == "impulse"
             linear_interpolate_3d_time(C_u_raw, times_native, times_out)
         else
-            linear_interpolate_3d_time(R_u_raw_step, times_native, times_out)
+            R_u_raw_step_out
         end
         R_u_corr = if cfg["methods.response_kind"] == "impulse"
             linear_interpolate_3d_time(C_u_corr, times_native, times_out)
         else
-            linear_interpolate_3d_time(R_u_corr_step, times_native, times_out)
+            R_u_corr_step_out
         end
 
         responses["gfdt_unet_raw"] = R_u_raw
@@ -1459,9 +1572,41 @@ function main(args=ARGS)
     end
 
     jacobian_asymptotes = Dict{String,Matrix{Float64}}()
-    haskey(responses, "numerical_integration") && (jacobian_asymptotes["numerical_integration"] = extract_asymptotic_jacobians(times_out, responses["numerical_integration"]))
-    haskey(responses, "gfdt_gaussian") && (jacobian_asymptotes["gfdt_gaussian"] = extract_asymptotic_jacobians(times_out, responses["gfdt_gaussian"]))
-    haskey(responses, "gfdt_unet") && (jacobian_asymptotes["gfdt_unet"] = extract_asymptotic_jacobians(times_out, responses["gfdt_unet"]))
+    if haskey(responses, "numerical_integration")
+        if baseline.asymptotic_jacobians === nothing
+            if haskey(heaviside_responses, "numerical_integration")
+                jacobian_asymptotes["numerical_integration"] = extract_asymptotic_jacobians(times_out, heaviside_responses["numerical_integration"])
+            else
+                jacobian_asymptotes["numerical_integration"] = extract_asymptotic_jacobians(times_out, responses["numerical_integration"])
+            end
+        else
+            jacobian_asymptotes["numerical_integration"] = Matrix{Float64}(baseline.asymptotic_jacobians)
+        end
+    end
+    if haskey(responses, "gfdt_gaussian")
+        gauss_main_key = cfg["methods.apply_score_correction"] ? "gfdt_gaussian_corrected" : "gfdt_gaussian_raw"
+        if haskey(heaviside_responses, gauss_main_key)
+            jacobian_asymptotes["gfdt_gaussian"] = extract_asymptotic_jacobians(times_out, heaviside_responses[gauss_main_key])
+        end
+    end
+    if haskey(responses, "gfdt_gaussian_raw") && haskey(heaviside_responses, "gfdt_gaussian_raw")
+        jacobian_asymptotes["gfdt_gaussian_raw"] = extract_asymptotic_jacobians(times_out, heaviside_responses["gfdt_gaussian_raw"])
+    end
+    if haskey(responses, "gfdt_gaussian_corrected") && haskey(heaviside_responses, "gfdt_gaussian_corrected")
+        jacobian_asymptotes["gfdt_gaussian_corrected"] = extract_asymptotic_jacobians(times_out, heaviside_responses["gfdt_gaussian_corrected"])
+    end
+    if haskey(responses, "gfdt_unet")
+        unet_main_key = cfg["methods.apply_score_correction"] ? "gfdt_unet_corrected" : "gfdt_unet_raw"
+        if haskey(unet_step_responses, unet_main_key)
+            jacobian_asymptotes["gfdt_unet"] = extract_asymptotic_jacobians(times_out, unet_step_responses[unet_main_key])
+        end
+    end
+    if haskey(responses, "gfdt_unet_raw") && haskey(unet_step_responses, "gfdt_unet_raw")
+        jacobian_asymptotes["gfdt_unet_raw"] = extract_asymptotic_jacobians(times_out, unet_step_responses["gfdt_unet_raw"])
+    end
+    if haskey(responses, "gfdt_unet_corrected") && haskey(unet_step_responses, "gfdt_unet_corrected")
+        jacobian_asymptotes["gfdt_unet_corrected"] = extract_asymptotic_jacobians(times_out, unet_step_responses["gfdt_unet_corrected"])
+    end
 
     jacobian_distance = Dict{String,Float64}()
     if haskey(jacobian_asymptotes, "numerical_integration") && haskey(jacobian_asymptotes, "gfdt_gaussian")
@@ -1480,28 +1625,49 @@ function main(args=ARGS)
     title_text = @sprintf("Responses (%s) | avg RMSE num-gauss=%.4f | avg RMSE num-unet=%.4f", cfg["methods.response_kind"], title_rmse_gauss, title_rmse_unet)
 
     curves = NamedTuple[]
-    haskey(responses, "numerical_integration") && push!(curves, (label="Numerical", color=:dodgerblue3, linestyle=:solid, data=responses["numerical_integration"]))
-    haskey(responses, "gfdt_gaussian") && push!(curves, (label="GFDT+Gaussian", color=:black, linestyle=:dash, data=responses["gfdt_gaussian"]))
-    haskey(responses, "gfdt_unet") && push!(curves, (label="GFDT+UNet", color=:orangered3, linestyle=:solid, data=responses["gfdt_unet"]))
+    haskey(responses, "numerical_integration") && push!(curves, (method_key="numerical_integration", label="Numerical", color=:dodgerblue3, linestyle=:solid, data=responses["numerical_integration"]))
+    haskey(responses, "gfdt_gaussian") && push!(curves, (method_key="gfdt_gaussian", label="GFDT+Gaussian", color=:black, linestyle=:dash, data=responses["gfdt_gaussian"]))
+    haskey(responses, "gfdt_unet") && push!(curves, (method_key="gfdt_unet", label="GFDT+UNet", color=:orangered3, linestyle=:solid, data=responses["gfdt_unet"]))
 
-    fig_main = save_response_figure(joinpath(out_dir, "responses_5x5_selected_methods.png"), times_out, curves; title_text=title_text, dpi=cfg["figures.dpi"])
+    fig_main = save_response_figure(
+        joinpath(out_dir, "responses_5x5_selected_methods.png"),
+        times_out,
+        curves;
+        asymptotic_curves=build_asymptotic_curves(curves, jacobian_asymptotes),
+        title_text=title_text,
+        dpi=cfg["figures.dpi"],
+    )
 
     fig_raw = ""
     if haskey(responses, "gfdt_unet_raw") || haskey(responses, "gfdt_gaussian_raw")
         curves_raw = NamedTuple[]
-        haskey(responses, "numerical_integration") && push!(curves_raw, (label="Numerical", color=:dodgerblue3, linestyle=:solid, data=responses["numerical_integration"]))
-        haskey(responses, "gfdt_gaussian_raw") && push!(curves_raw, (label="GFDT+Gaussian raw", color=:black, linestyle=:dash, data=responses["gfdt_gaussian_raw"]))
-        haskey(responses, "gfdt_unet_raw") && push!(curves_raw, (label="GFDT+UNet raw", color=:orangered3, linestyle=:solid, data=responses["gfdt_unet_raw"]))
-        fig_raw = save_response_figure(joinpath(out_dir, "responses_5x5_selected_methods_raw.png"), times_out, curves_raw; title_text=title_text * " (raw)", dpi=cfg["figures.dpi"])
+        haskey(responses, "numerical_integration") && push!(curves_raw, (method_key="numerical_integration", label="Numerical", color=:dodgerblue3, linestyle=:solid, data=responses["numerical_integration"]))
+        haskey(responses, "gfdt_gaussian_raw") && push!(curves_raw, (method_key="gfdt_gaussian_raw", label="GFDT+Gaussian raw", color=:black, linestyle=:dash, data=responses["gfdt_gaussian_raw"]))
+        haskey(responses, "gfdt_unet_raw") && push!(curves_raw, (method_key="gfdt_unet_raw", label="GFDT+UNet raw", color=:orangered3, linestyle=:solid, data=responses["gfdt_unet_raw"]))
+        fig_raw = save_response_figure(
+            joinpath(out_dir, "responses_5x5_selected_methods_raw.png"),
+            times_out,
+            curves_raw;
+            asymptotic_curves=build_asymptotic_curves(curves_raw, jacobian_asymptotes),
+            title_text=title_text * " (raw)",
+            dpi=cfg["figures.dpi"],
+        )
     end
 
     fig_corr = ""
     if haskey(responses, "gfdt_unet_corrected") || haskey(responses, "gfdt_gaussian_corrected")
         curves_corr = NamedTuple[]
-        haskey(responses, "numerical_integration") && push!(curves_corr, (label="Numerical", color=:dodgerblue3, linestyle=:solid, data=responses["numerical_integration"]))
-        haskey(responses, "gfdt_gaussian_corrected") && push!(curves_corr, (label="GFDT+Gaussian corrected", color=:black, linestyle=:dash, data=responses["gfdt_gaussian_corrected"]))
-        haskey(responses, "gfdt_unet_corrected") && push!(curves_corr, (label="GFDT+UNet corrected", color=:orangered3, linestyle=:solid, data=responses["gfdt_unet_corrected"]))
-        fig_corr = save_response_figure(joinpath(out_dir, "responses_5x5_selected_methods_corrected.png"), times_out, curves_corr; title_text=title_text * " (corrected)", dpi=cfg["figures.dpi"])
+        haskey(responses, "numerical_integration") && push!(curves_corr, (method_key="numerical_integration", label="Numerical", color=:dodgerblue3, linestyle=:solid, data=responses["numerical_integration"]))
+        haskey(responses, "gfdt_gaussian_corrected") && push!(curves_corr, (method_key="gfdt_gaussian_corrected", label="GFDT+Gaussian corrected", color=:black, linestyle=:dash, data=responses["gfdt_gaussian_corrected"]))
+        haskey(responses, "gfdt_unet_corrected") && push!(curves_corr, (method_key="gfdt_unet_corrected", label="GFDT+UNet corrected", color=:orangered3, linestyle=:solid, data=responses["gfdt_unet_corrected"]))
+        fig_corr = save_response_figure(
+            joinpath(out_dir, "responses_5x5_selected_methods_corrected.png"),
+            times_out,
+            curves_corr;
+            asymptotic_curves=build_asymptotic_curves(curves_corr, jacobian_asymptotes),
+            title_text=title_text * " (corrected)",
+            dpi=cfg["figures.dpi"],
+        )
     end
 
     h5_path = write_responses_hdf5(joinpath(out_dir, "responses_5x5_selected_methods.hdf5"), times_out, responses)

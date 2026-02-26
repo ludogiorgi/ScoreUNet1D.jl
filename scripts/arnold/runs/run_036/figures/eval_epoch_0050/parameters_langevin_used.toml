@@ -1,0 +1,31 @@
+[metrics]
+kl_low_q = 0.001
+max_acf_lag = 220
+kl_high_q = 0.999
+target_avg_mode_kl = 0.01
+
+[langevin]
+burn_in = 2000
+dt = 0.0025
+boundary_max = 12.0
+device = "GPU:1"
+progress = false
+ensembles = 64
+resolution = 20
+nsteps = 12000
+use_boundary = true
+pdf_bins = 90
+boundary_min = -12.0
+seed = 21
+
+[paths]
+model_path = ""
+data_params = "/home/ludogio/Documents/JuliaProjects/ScoreUNet1D.jl/scripts/arnold/runs/run_036/params/parameters_data_used.toml"
+metrics_path = "scripts/arnold/output/langevin/metrics.txt"
+output_dir = "scripts/arnold/output/langevin"
+
+[data]
+observations_role = "train_stochastic"
+
+[figures]
+dpi = 180
