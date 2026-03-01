@@ -1,0 +1,90 @@
+primary_method_requested = "unet"
+observable_residual = 4.298363191185886
+convergence_metric = 0.7913132122187257
+theta_after = [5.220097795291386, 1.6885879764881138, -0.37177527372885366, 0.020952299733880117, 2.75]
+train_data_path = "/home/ludogio/Documents/JuliaProjects/ScoreUNet1D.jl/scripts/arnold/runs_calibration/run_004/iter_001/data/train_stochastic.hdf5"
+primary_method = "unet"
+gfdt_data_path = "/home/ludogio/Documents/JuliaProjects/ScoreUNet1D.jl/scripts/arnold/runs_calibration/run_004/iter_001/data/gfdt_stochastic.hdf5"
+iteration = 1
+delta_theta_applied = [-4.844997795291386, -0.25858797648811366, 0.3595352737288537, -0.023067299733880116, 0.0]
+theta_before = [0.37510000000000004, 1.4300000000000002, -0.01224, -0.002115, 2.75]
+checkpoint_path = "/home/ludogio/Documents/JuliaProjects/ScoreUNet1D.jl/scripts/arnold/runs_calibration/run_004/iter_001/model/final_checkpoint.bson"
+
+[newton_primary]
+raw_cond = 1.9195232244842687e9
+raw_rhs_norm = 7514.269367536281
+weight_matrix_mode = "identity"
+residual_before = 4.298363191185886
+stability_accepted = true
+line_search_accepted = true
+free_parameters = [1, 2, 3, 4]
+line_search_scale = 1.0
+applied_step = [-4.844997795291386, -0.25858797648811366, 0.3595352737288537, -0.023067299733880116, 0.0]
+residual_after = 0.9361813712588293
+line_search_used = true
+stability_checked = true
+active_observables = [1, 2, 3, 4]
+correction_full = [-4.844997795291386, -0.25858797648811366, 0.3595352737288537, -0.023067299733880116, 0.0]
+
+[per_method.unet]
+jacobian_cond_active_free = 45180.628596777606
+theta_proposed = [5.220097795291386, 1.6885879764881138, -0.37177527372885366, 0.020952299733880117, 2.75]
+delta_theta = [-4.844997795291386, -0.25858797648811366, 0.3595352737288537, -0.023067299733880116, 0.0]
+
+    [per_method.unet.newton]
+    raw_cond = 1.9195232244842687e9
+    raw_rhs_norm = 7514.269367536281
+    weight_matrix_mode = "identity"
+    residual_before = 4.298363191185886
+    stability_accepted = true
+    line_search_accepted = true
+    free_parameters = [1, 2, 3, 4]
+    line_search_scale = 1.0
+    applied_step = [-4.844997795291386, -0.25858797648811366, 0.3595352737288537, -0.023067299733880116, 0.0]
+    residual_after = 0.9361813712588293
+    line_search_used = true
+    stability_checked = true
+    active_observables = [1, 2, 3, 4]
+    correction_full = [-4.844997795291386, -0.25858797648811366, 0.3595352737288537, -0.023067299733880116, 0.0]
+
+[per_method.finite_difference]
+jacobian_cond_active_free = 36888.950094208165
+theta_proposed = [6.678177083498337, 1.5779733079163678, -0.5244026628615424, 0.03440952625588057, 2.75]
+delta_theta = [-6.303077083498337, -0.14797330791636756, 0.5121626628615423, -0.03652452625588057, 0.0]
+
+    [per_method.finite_difference.newton]
+    raw_cond = 1.3129915256806004e9
+    raw_rhs_norm = 7966.2923100648
+    weight_matrix_mode = "identity"
+    residual_before = 4.298363191185886
+    stability_accepted = true
+    line_search_accepted = true
+    free_parameters = [1, 2, 3, 4]
+    line_search_scale = 1.0
+    applied_step = [-6.303077083498337, -0.14797330791636756, 0.5121626628615423, -0.03652452625588057, 0.0]
+    residual_after = 0.8846223044634958
+    line_search_used = true
+    stability_checked = true
+    active_observables = [1, 2, 3, 4]
+    correction_full = [-6.303077083498337, -0.14797330791636756, 0.5121626628615423, -0.03652452625588057, 0.0]
+
+[per_method.gaussian]
+jacobian_cond_active_free = 88243.32958948474
+theta_proposed = [6.150281733134733, -0.8864335111850945, -0.393450451319925, 0.047589216996619714, 2.75]
+delta_theta = [-5.775181733134733, 2.3164335111850947, 0.38121045131992504, -0.04970421699661971, 0.0]
+
+    [per_method.gaussian.newton]
+    raw_cond = 3.5553978031091404e9
+    raw_rhs_norm = 2455.9618316428623
+    weight_matrix_mode = "identity"
+    residual_before = 4.298363191185886
+    stability_accepted = true
+    line_search_accepted = true
+    free_parameters = [1, 2, 3, 4]
+    line_search_scale = 1.0
+    applied_step = [-5.775181733134733, 2.3164335111850947, 0.38121045131992504, -0.04970421699661971, 0.0]
+    residual_after = 1.00347249033252
+    line_search_used = true
+    stability_checked = true
+    active_observables = [1, 2, 3, 4]
+    correction_full = [-5.775181733134733, 2.3164335111850947, 0.38121045131992504, -0.04970421699661971, 0.0]

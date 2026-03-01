@@ -473,20 +473,31 @@ function estimate_divergence_hutchinson(
     X::Matrix{Float64};
     eps::Float64,
     n_probes::Int,
-    rng::AbstractRNG)
+    rng::AbstractRNG,
+    batch_size::Int=size(X, 2))
     K, N = size(X)
     n_probes >= 1 || error("n_probes must be >= 1")
+    batch_size >= 1 || error("batch_size must be >= 1")
     div = zeros(Float64, N)
     scale = 1.0 / (2eps)
 
     for _ in 1:n_probes
-        # Rademacher distribution: ±1 with equal probability
-        R = Float64.(rand(rng, [-1.0, 1.0], K, N))
-        Splus = score_fun(X .+ eps .* R)
-        Sminus = score_fun(X .- eps .* R)
-        D = (Splus .- Sminus) .* scale
-        @inbounds for n in 1:N
-            div[n] += dot(view(R, :, n), view(D, :, n))
+        for start in 1:batch_size:N
+            stop = min(start + batch_size - 1, N)
+            idx = start:stop
+            B = length(idx)
+
+            Xb = @view X[:, idx]
+            R = Float64.(rand(rng, [-1.0, 1.0], K, B))
+            Xplus = Xb .+ eps .* R
+            Xminus = Xb .- eps .* R
+
+            Splus = score_fun(Xplus)
+            Sminus = score_fun(Xminus)
+            D = (Splus .- Sminus) .* scale
+            @inbounds for n in 1:B
+                div[start + n - 1] += dot(view(R, :, n), view(D, :, n))
+            end
         end
     end
 
@@ -644,14 +655,14 @@ function unet_conjugates(
             div_raw = if divergence_mode == "fd_axis"
                 estimate_divergence_fd_axis(score_fun_raw, X; eps=divergence_eps)
             else
-                estimate_divergence_hutchinson(score_fun_raw, X; eps=divergence_eps, n_probes=divergence_probes, rng=rng)
+                estimate_divergence_hutchinson(score_fun_raw, X; eps=divergence_eps, n_probes=divergence_probes, rng=rng, batch_size=batch_size)
             end
 
             div_corr = if apply_correction
                 if divergence_mode == "fd_axis"
                     estimate_divergence_fd_axis(score_fun_corr, X; eps=divergence_eps)
                 else
-                    estimate_divergence_hutchinson(score_fun_corr, X; eps=divergence_eps, n_probes=divergence_probes, rng=rng)
+                    estimate_divergence_hutchinson(score_fun_corr, X; eps=divergence_eps, n_probes=divergence_probes, rng=rng, batch_size=batch_size)
                 end
             else
                 div_raw

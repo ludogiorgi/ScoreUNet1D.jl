@@ -19,16 +19,16 @@ start_index = 30001
 score_device = "CPU"
 
 [numerical]
-min_valid_fraction = 0.8
+start_index = 10001
+thread_chunk_size = 256
 h_abs = [0.05, 0.02, 0.01, 0.002, 0.05]
 h_rel = 0.005
 seed_base = 1900000
 max_abs_state = 80.0
 h_shrink_factor = 0.5
+min_valid_fraction = 0.8
 ensembles = 60000
 max_h_shrinks = 6
-thread_chunk_size = 256
-start_index = 10001
 
 [cache]
 force_regenerate = false

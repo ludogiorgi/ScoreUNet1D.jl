@@ -1,0 +1,97 @@
+# ──────────────────────────────────────────────────────
+# Parameter calibration configuration
+# ──────────────────────────────────────────────────────
+
+[paths]
+data_params = "scripts/arnold/parameters_data.toml"
+train_params = "scripts/arnold/parameters_train.toml"
+responses_params = "scripts/arnold/parameters_responses.toml"
+runs_root = "scripts/arnold/runs_calibration"
+
+[truth]
+# How to obtain target observables A_target.
+# "two_scale" = integrate deterministic two-scale L96 (default)
+# "file"      = load from HDF5 (specify truth_file and truth_key)
+source = "two_scale"
+nsamples = 200_000       # samples for target observable estimation
+spinup_steps = 2_000
+rng_seed = 101
+save_every = 200         # save_every for truth trajectory
+
+[initial_theta]
+# Starting guess for the closure parameters.
+# If auto_fit = true in parameters_data.toml, these are overridden by regression fit.
+alpha0 = 0.341
+alpha1 = 1.30
+alpha2 = -0.0136
+alpha3 = -0.00235
+sigma = 2.5
+# Random perturbation of initial guess: each parameter is perturbed by
+# ±perturbation_fraction * |value|.  Set to 0.0 for no perturbation.
+perturbation_fraction = 0.1
+
+[calibration]
+max_iterations = 10
+tol_theta = 1e-3          # convergence: ‖Δθ‖/‖θ‖ < tol
+tol_obs = 1e-4            # convergence: ‖G - A_target‖ < tol
+damping = 1.0             # step size multiplier (1.0 = full Newton)
+line_search = true        # backtracking line search
+line_search_max = 5       # max backtracking halvings
+regularization_gamma = 1e-4  # Tikhonov regularization: Γ = γ * I
+weight_matrix = "identity"   # "identity" | "inverse_cov" | "diagonal"
+
+# Which parameters to update (1-indexed). Empty = all.
+# Example: [1, 2, 3, 4, 5] for all, [1, 2, 5] for α₀, α₁, σ only.
+free_parameters = [1, 2, 3, 4]
+
+# Which observables to match (1-indexed). Empty = all.
+# Example: [1, 2, 3, 4, 5] for all, [1, 2] for φ₁, φ₂ only.
+active_observables = [1, 2, 3, 4]
+
+[methods]
+# Which Jacobian methods to run. All enabled methods run in parallel at each iteration.
+unet = true
+gaussian = true
+finite_difference = true   # expensive; usually for validation only
+
+[datasets]
+# Per-iteration dataset sizes for the stochastic model
+train_nsamples = 1_000_000
+train_save_every = 200
+train_rng_seed_base = 2000  # actual seed = base + iteration
+
+gfdt_nsamples = 100_000
+gfdt_save_every = 2
+gfdt_rng_seed_base = 3000
+
+[training]
+# UNet training settings per calibration iteration.
+# These override parameters_train.toml when running inside the calibration loop.
+epochs = 30               # can be less than standalone training
+device = "GPU:0"
+resume_from_previous = true  # warm-start from previous iteration's checkpoint
+
+[responses]
+# GFDT response settings per iteration
+response_tmax = 2.0
+mean_center = true
+apply_score_correction = true
+divergence_mode = "hutchinson"
+divergence_eps = 0.03
+divergence_probes = 10
+score_device = "GPU:0"
+batch_size = 1024
+tail_window = 1.0          # time window for asymptotic Jacobian extraction
+
+[responses.finite_difference]
+# Only used if methods.finite_difference = true
+nsamples = 15_000_000
+spinup = 2_000
+h_abs = [0.05, 0.02, 0.01, 0.002, 0.05]
+h_rel = 0.005
+seed_base = 50_000_000
+
+[figures]
+dpi = 180
+save_per_iteration = true   # save response + stats figures each iteration
+save_convergence = true     # save final convergence figure

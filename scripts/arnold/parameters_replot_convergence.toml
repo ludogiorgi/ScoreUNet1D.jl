@@ -1,0 +1,38 @@
+# Replot convergence figure from an existing calibration run.
+#
+# Usage:
+#   julia --project=. scripts/arnold/replot_convergence.jl \
+#       --params scripts/arnold/parameters_replot_convergence.toml
+
+[paths]
+# Required: pick any existing run inside scripts/arnold/runs_calibration
+run_dir = "scripts/arnold/runs_calibration/run_013"
+
+# Output path for the regenerated figure.
+# Relative paths are resolved inside run_dir.
+output_file = "convergence_no_param_ref.png"
+
+[plot]
+# Optional override for figure resolution.
+dpi = 180
+
+# Remove iteration 0 only from first-row parameter panels.
+drop_iteration0_first_row = true
+
+# Drop points from the tail of each plotted curve.
+# Set to 1 to exclude the last iteration point.
+drop_last_n = 1
+
+[selection]
+# Explicit panel selection for the convergence figure.
+# Drift parameters only: alpha0..alpha3
+free_parameters = [1, 2, 3, 4]
+
+# First four observables only: phi1..phi4
+active_observables = [1, 2, 3, 4]
+
+[methods]
+# Optional overrides. If omitted, values are read from run/config/parameters_calibration.toml
+unet = true
+gaussian = true
+finite_difference = true

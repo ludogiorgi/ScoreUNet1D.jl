@@ -1,0 +1,72 @@
+[paths]
+data_params = "scripts/arnold/parameters_data.toml"
+train_params = "scripts/arnold/parameters_train.toml"
+responses_params = "scripts/arnold/parameters_responses.toml"
+runs_root = "scripts/arnold/runs_calibration"
+
+[truth]
+source = "two_scale"
+nsamples = 10_000
+spinup_steps = 2_000
+rng_seed = 101
+save_every = 200
+
+[initial_theta]
+alpha0 = 0.5
+alpha1 = 1.5
+alpha2 = 0.0
+alpha3 = 0.0
+sigma = 3.0
+
+[calibration]
+max_iterations = 1
+tol_theta = 1e-5
+tol_obs = 1e-4
+damping = 1.0
+line_search = false
+line_search_max = 2
+regularization_gamma = 1e-4
+weight_matrix = "identity"
+free_parameters = [1, 2, 3, 4]
+active_observables = [1, 2, 3, 4]
+
+[methods]
+unet = true
+gaussian = true
+finite_difference = false
+
+[datasets]
+train_nsamples = 5_000
+train_save_every = 200
+train_rng_seed_base = 2000
+gfdt_nsamples = 3_000
+gfdt_save_every = 2
+gfdt_rng_seed_base = 3000
+
+[training]
+epochs = 2
+device = "CPU"
+resume_from_previous = false
+
+[responses]
+response_tmax = 0.5
+mean_center = true
+apply_score_correction = true
+divergence_mode = "hutchinson"
+divergence_eps = 0.03
+divergence_probes = 2
+score_device = "CPU"
+batch_size = 512
+tail_window = 0.2
+
+[responses.finite_difference]
+nsamples = 50_000
+spinup = 2_000
+h_abs = [0.05, 0.02, 0.01, 0.002, 0.05]
+h_rel = 0.005
+seed_base = 50_000_000
+
+[figures]
+dpi = 120
+save_per_iteration = true
+save_convergence = true

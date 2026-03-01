@@ -1,0 +1,90 @@
+primary_method_requested = "unet"
+observable_residual = 0.37854471803929374
+convergence_metric = 0.017064239861556293
+theta_after = [7.389575229012577, 2.040970239880815, -0.7419273054355332, 0.049502478123183216, 2.75]
+train_data_path = "/home/ludogio/Documents/JuliaProjects/ScoreUNet1D.jl/scripts/arnold/runs_calibration/run_013/iter_004/data/train_stochastic.hdf5"
+primary_method = "unet"
+gfdt_data_path = "/home/ludogio/Documents/JuliaProjects/ScoreUNet1D.jl/scripts/arnold/runs_calibration/run_013/iter_004/data/gfdt_stochastic.hdf5"
+iteration = 4
+delta_theta_applied = [-0.10163766080194149, -0.09301818907545072, 0.022205285526410018, -0.000988257357607632, 0.0]
+theta_before = [7.287937568210635, 1.947952050805364, -0.7197220199091232, 0.048514220765575586, 2.75]
+checkpoint_path = "/home/ludogio/Documents/JuliaProjects/ScoreUNet1D.jl/scripts/arnold/runs_calibration/run_013/iter_004/model/final_checkpoint.bson"
+
+[newton_primary]
+raw_cond = 9.592607278389863e8
+raw_rhs_norm = 201.409026193238
+weight_matrix_mode = "identity"
+residual_before = 0.37854471803929374
+stability_accepted = true
+line_search_accepted = true
+free_parameters = [1, 2, 3, 4]
+line_search_scale = 0.25
+applied_step = [-0.10163766080194149, -0.09301818907545072, 0.022205285526410018, -0.000988257357607632, 0.0]
+residual_after = 0.12344044111356008
+line_search_used = true
+stability_checked = true
+active_observables = [1, 2, 3, 4]
+correction_full = [-0.40655064320776596, -0.37207275630180286, 0.08882114210564007, -0.003953029430430528, 0.0]
+
+[per_method.unet]
+jacobian_cond_active_free = 31917.918853457057
+theta_proposed = [7.389575229012577, 2.040970239880815, -0.7419273054355332, 0.049502478123183216, 2.75]
+delta_theta = [-0.10163766080194149, -0.09301818907545072, 0.022205285526410018, -0.000988257357607632, 0.0]
+
+    [per_method.unet.newton]
+    raw_cond = 9.592607278389863e8
+    raw_rhs_norm = 201.409026193238
+    weight_matrix_mode = "identity"
+    residual_before = 0.37854471803929374
+    stability_accepted = true
+    line_search_accepted = true
+    free_parameters = [1, 2, 3, 4]
+    line_search_scale = 0.25
+    applied_step = [-0.10163766080194149, -0.09301818907545072, 0.022205285526410018, -0.000988257357607632, 0.0]
+    residual_after = 0.12344044111356008
+    line_search_used = true
+    stability_checked = true
+    active_observables = [1, 2, 3, 4]
+    correction_full = [-0.40655064320776596, -0.37207275630180286, 0.08882114210564007, -0.003953029430430528, 0.0]
+
+[per_method.finite_difference]
+jacobian_cond_active_free = 38638.2636981716
+theta_proposed = [3.0005876600306034, 0.9023103112092357, -0.424876651624691, 0.03651040960736592, 2.75]
+delta_theta = [0.0, 0.0, 0.0, 0.0, 0.0]
+
+    [per_method.finite_difference.newton]
+    raw_cond = 1.3513183960505862e9
+    raw_rhs_norm = 230.09889741845174
+    weight_matrix_mode = "identity"
+    residual_before = 0.37854471803929374
+    stability_accepted = false
+    line_search_accepted = false
+    free_parameters = [1, 2, 3, 4]
+    line_search_scale = 0.0
+    applied_step = [0.0, 0.0, 0.0, 0.0, 0.0]
+    residual_after = 0.37854471803929374
+    line_search_used = true
+    stability_checked = false
+    active_observables = [1, 2, 3, 4]
+    correction_full = [0.18145857756879397, -0.32831985694854454, -0.015508803017128222, 0.004547638917137861, 0.0]
+
+[per_method.gaussian]
+jacobian_cond_active_free = 60862.46846456068
+theta_proposed = [0.37510000000000004, 1.4300000000000002, -0.01224, -0.002115, 2.75]
+delta_theta = [0.0, 0.0, 0.0, 0.0, 0.0]
+
+    [per_method.gaussian.newton]
+    raw_cond = 3.010123480393936e9
+    raw_rhs_norm = 292.99940677952384
+    weight_matrix_mode = "identity"
+    residual_before = 0.37854471803929374
+    stability_accepted = false
+    line_search_accepted = false
+    free_parameters = [1, 2, 3, 4]
+    line_search_scale = 0.0
+    applied_step = [0.0, 0.0, 0.0, 0.0, 0.0]
+    residual_after = 0.37854471803929374
+    line_search_used = true
+    stability_checked = false
+    active_observables = [1, 2, 3, 4]
+    correction_full = [0.2733250467970872, -0.08389493797192416, 0.013516991253192915, -0.0012899451950147735, 0.0]
