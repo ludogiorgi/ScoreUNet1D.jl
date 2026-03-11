@@ -1,0 +1,36 @@
+primary_method_requested = "unet"
+observable_residual_primary = 1.3455817242900603
+primary_method = "unet"
+convergence_metric_primary = 0.18550720897401077
+iteration = 4
+inactive_methods = []
+theta_primary = [1.4552426429336691, 1.682867448271334, -0.08986719102361812, -0.0004487771429599139, 1.6534878720104083]
+
+[per_method.unet]
+relative_step = 0.18550720897401077
+observable_residual = 1.3455817242900603
+observable_residual_unweighted = 1.3455817242900603
+train_data_path = "/home/ludogio/Documents/JuliaProjects/ScoreUNet1D.jl/scripts/arnold/runs_calibration/run_030/method_unet/iter_004/data/train_stochastic.hdf5"
+gfdt_data_path = "/home/ludogio/Documents/JuliaProjects/ScoreUNet1D.jl/scripts/arnold/runs_calibration/run_030/method_unet/iter_004/data/gfdt_stochastic.hdf5"
+jacobian_cond_active_free = 656236.1634484872
+checkpoint_path = "/home/ludogio/Documents/JuliaProjects/ScoreUNet1D.jl/scripts/arnold/runs_calibration/run_030/method_unet/iter_004/model/final_checkpoint.bson"
+theta_before = [1.935797716622598, 1.7844651141633172, -0.1465937829288758, 0.0032649694185696992, 1.7956598241065276]
+theta_proposed = [1.4552426429336691, 1.682867448271334, -0.08986719102361812, -0.0004487771429599139, 1.6534878720104083]
+delta_theta = [0.48055507368892875, 0.1015976658919832, -0.056726591905257674, 0.003713746561529613, 0.14217195209611935]
+
+    [per_method.unet.newton]
+    raw_cond = 1.1828293293017586e10
+    raw_rhs_norm = 788.8161553131661
+    weight_matrix_mode = "identity"
+    residual_before = 1.658515368591536
+    stability_accepted = true
+    line_search_accepted = true
+    free_parameters = [1, 2, 3, 4, 5]
+    line_search_scale = 0.125
+    applied_step = [0.48055507368892875, 0.1015976658919832, -0.056726591905257674, 0.003713746561529613, 0.14217195209611935]
+    residual_before_unweighted = 1.658515368591536
+    residual_after = 1.5165455940677124
+    line_search_used = true
+    stability_checked = true
+    active_observables = [1, 2, 3, 4, 5]
+    correction_full = [3.84444058951143, 0.8127813271358656, -0.4538127352420614, 0.029709972492236905, 1.1373756167689548]

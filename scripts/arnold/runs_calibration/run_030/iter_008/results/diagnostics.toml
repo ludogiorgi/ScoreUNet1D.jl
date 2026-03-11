@@ -1,0 +1,36 @@
+primary_method_requested = "unet"
+observable_residual_primary = 0.9771220751791445
+primary_method = "unet"
+convergence_metric_primary = 0.1476293535697911
+iteration = 8
+inactive_methods = []
+theta_primary = [1.073193009904601, 1.4075908530818078, -0.04179571283753561, -0.0020595602872223026, 1.1967991621628602]
+
+[per_method.unet]
+relative_step = 0.1476293535697911
+observable_residual = 0.9771220751791445
+observable_residual_unweighted = 0.9771220751791445
+train_data_path = "/home/ludogio/Documents/JuliaProjects/ScoreUNet1D.jl/scripts/arnold/runs_calibration/run_030/method_unet/iter_008/data/train_stochastic.hdf5"
+gfdt_data_path = "/home/ludogio/Documents/JuliaProjects/ScoreUNet1D.jl/scripts/arnold/runs_calibration/run_030/method_unet/iter_008/data/gfdt_stochastic.hdf5"
+jacobian_cond_active_free = 6.368212310988453e6
+checkpoint_path = "/home/ludogio/Documents/JuliaProjects/ScoreUNet1D.jl/scripts/arnold/runs_calibration/run_030/method_unet/iter_008/model/final_checkpoint.bson"
+theta_before = [1.3858682890679592, 1.4144052525946387, -0.06634418276446538, -0.00029075454755359085, 1.230266385437785]
+theta_proposed = [1.073193009904601, 1.4075908530818078, -0.04179571283753561, -0.0020595602872223026, 1.1967991621628602]
+delta_theta = [0.31267527916335836, 0.006814399512830901, -0.02454846992692977, 0.0017688057396687117, 0.03346722327492498]
+
+    [per_method.unet.newton]
+    raw_cond = 1.002832923167622e10
+    raw_rhs_norm = 565.7268943558174
+    weight_matrix_mode = "identity"
+    residual_before = 1.0845186134627707
+    stability_accepted = true
+    line_search_accepted = true
+    free_parameters = [1, 2, 3, 4, 5]
+    line_search_scale = 0.125
+    applied_step = [0.31267527916335836, 0.006814399512830901, -0.02454846992692977, 0.0017688057396687117, 0.03346722327492498]
+    residual_before_unweighted = 1.0845186134627707
+    residual_after = 1.0213512150133
+    line_search_used = true
+    stability_checked = true
+    active_observables = [1, 2, 3, 4, 5]
+    correction_full = [2.501402233306867, 0.054515196102647205, -0.19638775941543815, 0.014150445917349694, 0.26773778619939986]

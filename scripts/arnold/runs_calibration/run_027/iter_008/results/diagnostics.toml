@@ -1,0 +1,94 @@
+primary_method_requested = "unet"
+observable_residual_primary = 0.12863427654056994
+primary_method = "unet"
+convergence_metric_primary = 0.0021856949323502003
+iteration = 8
+inactive_methods = []
+theta_primary = [7.5322897607470125, 2.072108159995547, -0.7482282197424686, 0.04947119699347835, 2.75]
+
+[per_method.unet]
+relative_step = 0.0021856949323502003
+observable_residual = 0.12863427654056994
+observable_residual_unweighted = 0.12863427654056994
+train_data_path = "/home/ludogio/Documents/JuliaProjects/ScoreUNet1D.jl/scripts/arnold/runs_calibration/run_027/method_unet/iter_008/data/train_stochastic.hdf5"
+gfdt_data_path = "/home/ludogio/Documents/JuliaProjects/ScoreUNet1D.jl/scripts/arnold/runs_calibration/run_027/method_unet/iter_008/data/gfdt_stochastic.hdf5"
+jacobian_cond_active_free = 12792.201081138312
+checkpoint_path = "/home/ludogio/Documents/JuliaProjects/ScoreUNet1D.jl/scripts/arnold/runs_calibration/run_027/method_unet/iter_008/model/final_checkpoint.bson"
+theta_before = [7.529278530392003, 2.0557655257132645, -0.7408870152540415, 0.048902492438989614, 2.75]
+theta_proposed = [7.5322897607470125, 2.072108159995547, -0.7482282197424686, 0.04947119699347835, 2.75]
+delta_theta = [-0.0030112303550095957, -0.01634263428228243, 0.0073412044884270024, -0.0005687045544887381, 0.0]
+
+    [per_method.unet.newton]
+    raw_cond = 1.4902333366322553e8
+    raw_rhs_norm = 81.378852032474
+    weight_matrix_mode = "identity"
+    residual_before = 0.07695022079282617
+    stability_accepted = true
+    line_search_accepted = true
+    free_parameters = [1, 2, 3, 4]
+    line_search_scale = 0.25
+    applied_step = [-0.0030112303550095957, -0.01634263428228243, 0.0073412044884270024, -0.0005687045544887381, 0.0]
+    residual_before_unweighted = 0.07695022079282617
+    residual_after = 0.05966313398361786
+    line_search_used = true
+    stability_checked = true
+    active_observables = [1, 2, 3, 4]
+    correction_full = [-0.012044921420038383, -0.06537053712912971, 0.02936481795370801, -0.0022748182179549523, 0.0]
+
+[per_method.finite_difference]
+relative_step = 0.01545566232193901
+observable_residual = 0.4714853042764491
+observable_residual_unweighted = 0.4714853042764491
+train_data_path = "/home/ludogio/Documents/JuliaProjects/ScoreUNet1D.jl/scripts/arnold/runs_calibration/run_027/method_finite_difference/iter_008/data/train_stochastic.hdf5"
+gfdt_data_path = "/home/ludogio/Documents/JuliaProjects/ScoreUNet1D.jl/scripts/arnold/runs_calibration/run_027/method_finite_difference/iter_008/data/gfdt_stochastic.hdf5"
+jacobian_cond_active_free = 617646.7253988765
+checkpoint_path = ""
+theta_before = [3.6734478377336965, 1.533564129658576, -0.22164400933408374, 0.010181833782571738, 2.75]
+theta_proposed = [3.6061191671083233, 1.503621632246441, -0.2157793659994517, 0.010043740939426981, 2.75]
+delta_theta = [0.06732867062537334, 0.02994249741213499, -0.005864643334632034, 0.00013809284314475638, 0.0]
+
+    [per_method.finite_difference.newton]
+    raw_cond = 1.1975149604338345e10
+    raw_rhs_norm = 584.9021065492545
+    weight_matrix_mode = "identity"
+    residual_before = 0.3581418953646555
+    stability_accepted = true
+    line_search_accepted = true
+    free_parameters = [1, 2, 3, 4]
+    line_search_scale = 0.125
+    applied_step = [0.06732867062537334, 0.02994249741213499, -0.005864643334632034, 0.00013809284314475638, 0.0]
+    residual_before_unweighted = 0.3581418953646555
+    residual_after = 0.3208300272072082
+    line_search_used = true
+    stability_checked = true
+    active_observables = [1, 2, 3, 4]
+    correction_full = [0.5386293650029867, 0.23953997929707993, -0.04691714667705627, 0.001104742745158051, 0.0]
+
+[per_method.gaussian]
+relative_step = 0.07625241170617603
+observable_residual = 1.83118687004493
+observable_residual_unweighted = 1.83118687004493
+train_data_path = "/home/ludogio/Documents/JuliaProjects/ScoreUNet1D.jl/scripts/arnold/runs_calibration/run_027/method_gaussian/iter_008/data/train_stochastic.hdf5"
+gfdt_data_path = "/home/ludogio/Documents/JuliaProjects/ScoreUNet1D.jl/scripts/arnold/runs_calibration/run_027/method_gaussian/iter_008/data/gfdt_stochastic.hdf5"
+jacobian_cond_active_free = 124167.87655405325
+checkpoint_path = ""
+theta_before = [0.4892733255666958, 1.7999018961193731, -0.07448691890692985, -0.0012185795854976968, 2.75]
+theta_proposed = [0.26640515303468776, 1.9277845711588004, -0.07568126355809623, -0.0018992194229763408, 2.75]
+delta_theta = [0.22286817253200802, -0.12788267503942727, 0.0011943446511663797, 0.0006806398374786439, 0.0]
+
+    [per_method.gaussian.newton]
+    raw_cond = 2.5404717363792067e9
+    raw_rhs_norm = 326.35483126428676
+    weight_matrix_mode = "identity"
+    residual_before = 1.6543109064388546
+    stability_accepted = true
+    line_search_accepted = true
+    free_parameters = [1, 2, 3, 4]
+    line_search_scale = 0.125
+    applied_step = [0.22286817253200802, -0.12788267503942727, 0.0011943446511663797, 0.0006806398374786439, 0.0]
+    residual_before_unweighted = 1.6543109064388548
+    residual_after = 1.5869690799964338
+    line_search_used = true
+    stability_checked = true
+    active_observables = [1, 2, 3, 4]
+    correction_full = [1.7829453802560642, -1.0230614003154181, 0.009554757209331037, 0.005445118699829151, 0.0]

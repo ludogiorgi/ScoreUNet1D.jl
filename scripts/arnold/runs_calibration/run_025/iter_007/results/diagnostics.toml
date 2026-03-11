@@ -1,0 +1,34 @@
+primary_method_requested = "unet"
+observable_residual_primary = 1.489805448238493
+primary_method = "unet"
+convergence_metric_primary = 0.05214447151077802
+iteration = 7
+inactive_methods = ["finite_difference", "gaussian"]
+theta_primary = [1.6725440542168097, 1.6380906168466274, -0.1138068082034041, 0.002129494761252791, 2.0011029533932523]
+
+[per_method.unet]
+gfdt_data_path = "/home/ludogio/Documents/JuliaProjects/ScoreUNet1D.jl/scripts/arnold/runs_calibration/run_025/method_unet/iter_007/data/gfdt_stochastic.hdf5"
+jacobian_cond_active_free = 39475.47077199073
+relative_step = 0.05214447151077802
+observable_residual = 1.489805448238493
+theta_before = [1.5426355307330657, 1.6557260767346118, -0.10668276887516862, 0.0016076396410276274, 2.0937719877454155]
+checkpoint_path = "/home/ludogio/Documents/JuliaProjects/ScoreUNet1D.jl/scripts/arnold/runs_calibration/run_025/method_unet/iter_007/model/final_checkpoint.bson"
+theta_proposed = [1.6725440542168097, 1.6380906168466274, -0.1138068082034041, 0.002129494761252791, 2.0011029533932523]
+delta_theta = [-0.12990852348374396, 0.017635459887984328, 0.007124039328235474, -0.0005218551202251636, 0.09266903435216312]
+train_data_path = "/home/ludogio/Documents/JuliaProjects/ScoreUNet1D.jl/scripts/arnold/runs_calibration/run_025/method_unet/iter_007/data/train_stochastic.hdf5"
+
+    [per_method.unet.newton]
+    raw_cond = 2.6277292119379103e8
+    raw_rhs_norm = 147.41482228440168
+    weight_matrix_mode = "inverse_cov"
+    residual_before = 1.7112056923057146
+    stability_accepted = true
+    line_search_accepted = true
+    free_parameters = [1, 2, 3, 4, 5]
+    line_search_scale = 0.2
+    applied_step = [-0.12990852348374396, 0.017635459887984328, 0.007124039328235474, -0.0005218551202251636, 0.09266903435216312]
+    residual_after = 1.613948123823772
+    line_search_used = true
+    stability_checked = true
+    active_observables = [1, 2, 3, 4, 5, 6]
+    correction_full = [-0.6495426174187198, 0.08817729943992163, 0.03562019664117737, -0.002609275601125818, 0.4633451717608155]

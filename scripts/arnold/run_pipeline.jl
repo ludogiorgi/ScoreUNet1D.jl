@@ -689,7 +689,7 @@ function main(args=ARGS)
     pipeline_params_path = parse_args(args)
     cfg, _ = load_pipeline_config(pipeline_params_path)
 
-    run_info = next_run_dir(cfg["run.runs_root"]; pad=cfg["run.run_id_padding"])
+    run_info = claim_next_run_dir(cfg["run.runs_root"]; pad=cfg["run.run_id_padding"])
     dirs = create_run_scaffold(run_info.run_dir)
     pipeline_log = joinpath(dirs["logs"], "pipeline.log")
 
@@ -706,8 +706,9 @@ function main(args=ARGS)
     data_cfg, _ = load_data_config(effective_params["data"])
     train_role, gfdt_role = read_dataset_roles(effective_params["train"], effective_params["responses"])
     required_roles = String[train_role, gfdt_role]
-    if data_cfg["closure.auto_fit"] && !("two_scale_observed" in required_roles)
-        push!(required_roles, "two_scale_observed")
+    fit_role = String(data_cfg["closure.fit_dataset_role"])
+    if data_cfg["closure.auto_fit"] && !(fit_role in required_roles)
+        push!(required_roles, fit_role)
     end
     unique!(required_roles)
     append_log(pipeline_log, "dataset prewarm roles=$(join(required_roles, ","))")

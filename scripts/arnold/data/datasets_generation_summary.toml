@@ -1,21 +1,40 @@
-roles_requested = ["two_scale_observed", "train_stochastic", "gfdt_stochastic"]
+roles_requested = ["two_scale_observed", "train_stochastic", "gfdt_stochastic", "two_scale_fit"]
 parameters_data_path = "/home/ludogio/Documents/JuliaProjects/ScoreUNet1D.jl/scripts/arnold/parameters_data.toml"
 datasets_hdf5 = "/home/ludogio/Documents/JuliaProjects/ScoreUNet1D.jl/scripts/arnold/data/l96_arnold_datasets.hdf5"
 
 [closure_used]
-sigma = 2.5
-alpha2 = -0.0136
-alpha1 = 1.3
-alpha3 = -0.00235
-alpha0 = 0.341
+sigma = 1.0359301191171504
+alpha2 = -0.008426766431124878
+alpha1 = 0.39447150979547196
+alpha3 = -0.0016716747838000485
+alpha0 = 0.14937746851445197
 
 [closure_meta]
-theta_initial = [0.341, 1.3, -0.0136, -0.00235, 2.5]
-theta_used = [0.341, 1.3, -0.0136, -0.00235, 2.5]
-mode = "initial_only"
-fit_start_index = 0
-fit_dataset_role = ""
-fit_samples = 0
+theta_initial = [0.04636738678495637, 0.3660714354042205, 0.011016434610840226, -0.0019401319945469076, 0.41443993804139906]
+fit_dataset_load_samples = 50002
+fit_dt_obs = 0.01
+theta_used = [0.14937746851445197, 0.39447150979547196, -0.008426766431124878, -0.0016716747838000485, 1.0359301191171504]
+mode = "auto_fit"
+fit_start_index = 2
+fit_dataset_role = "two_scale_fit"
+fit_samples = 50000
+fit_dataset_load_start_index = 1
+
+    [closure_meta.fit_details]
+    fit_window_samples = 50000
+    fit_dt_obs = 0.01
+    fit_window_start = 2
+    fit_window_stop = 50001
+
+        [closure_meta.fit_details.sigma_estimator]
+        sigma_fallback = 0.7150985848681541
+        integrated_autocovariance = 0.5365756058470368
+        dt_obs = 0.01
+        mode = "green_kubo"
+        cutoff_lag = 11
+        cutoff_time = 0.11
+        lag0_covariance = 51.13448371013637
+        max_lag = 500
 
 [figures]
 max_acf_lag = 200
@@ -27,20 +46,27 @@ deterministic_role = "two_scale_observed"
 [datasets.gfdt_stochastic]
 key = "x_gfdt_stochastic"
 role = "gfdt_stochastic"
-signature = "3aab1cd8114ad5525905aa2743186662a9616f6b"
+signature = "6711f556c28ff7b85db5a20c9a5fdb91e0323591"
 generated = true
 path = "/home/ludogio/Documents/JuliaProjects/ScoreUNet1D.jl/scripts/arnold/data/l96_arnold_datasets.hdf5"
 
 [datasets.train_stochastic]
 key = "x_train_stochastic"
 role = "train_stochastic"
-signature = "b71c912ce4d026b256189af5cb25fc1d40250dc4"
+signature = "0816d9809082f228e7f7b1853f8a31e9c0cc9c70"
 generated = true
 path = "/home/ludogio/Documents/JuliaProjects/ScoreUNet1D.jl/scripts/arnold/data/l96_arnold_datasets.hdf5"
 
 [datasets.two_scale_observed]
 key = "x_two_scale_observed"
 role = "two_scale_observed"
-signature = "0f42bb08243c4d06ec2c157ee38d4ef6585914d6"
+signature = "cdf599e4007ccc38a078e38af7d8667727662e17"
+generated = true
+path = "/home/ludogio/Documents/JuliaProjects/ScoreUNet1D.jl/scripts/arnold/data/l96_arnold_datasets.hdf5"
+
+[datasets.two_scale_fit]
+key = "x_two_scale_fit"
+role = "two_scale_fit"
+signature = "3fb7c228c7205520d90a8b137cfe87d99902ea88"
 generated = false
 path = "/home/ludogio/Documents/JuliaProjects/ScoreUNet1D.jl/scripts/arnold/data/l96_arnold_datasets.hdf5"

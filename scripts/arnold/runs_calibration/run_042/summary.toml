@@ -1,0 +1,42 @@
+free_parameters = [1, 2, 3, 4, 5]
+iterations = 10
+run_dir = "/home/ludogio/Documents/JuliaProjects/ScoreUNet1D.jl/scripts/arnold/runs_calibration/run_042"
+converged = false
+convergence_metric = 0.0
+obs_residual_primary = 0.9310160467373172
+active_observables = [1, 2, 3, 4, 5, 6, 8, 10, 14, 20]
+
+[final_theta]
+sigma = 0.8500916194069477
+alpha2 = -4.766172842007074
+alpha1 = 11.48582641920319
+alpha3 = 0.550679248130265
+alpha0 = -0.9516124271855362
+
+[methods]
+primary = "unet"
+unet = true
+finite_difference = true
+gaussian = true
+
+[target_observables]
+phi5_mean_x_xp3 = 3.82821793891631
+phi4_mean_x_xp2 = 2.7665503180877846
+phi14_mean_x_xp12 = 3.8437737270871923
+phi19_mean_x_xp17 = 5.671908441323411
+phi1_mean_x = 2.3145328168132173
+phi8_mean_x_xp6 = 3.8341182733834285
+phi11_mean_x_xp9 = 8.440169351010105
+phi7_mean_x_xp5 = 7.595004643449342
+phi18_mean_x_xp16 = 2.8001196852769015
+phi12_mean_x_xp10 = 5.672320238178851
+phi16_mean_x_xp14 = 7.576973192565536
+phi20_mean_x_xp18 = 8.427052879113345
+phi17_mean_x_xp15 = 3.845092364730714
+phi2_mean_x2 = 8.508138220307355
+phi13_mean_x_xp11 = 2.7955256655076197
+phi9_mean_x_xp7 = 2.789253433549444
+phi3_mean_x_xp1 = 5.665295252873647
+phi10_mean_x_xp8 = 5.669299958957383
+phi15_mean_x_xp13 = 7.576616866701324
+phi6_mean_x_xp4 = 7.595629394726141

@@ -1,0 +1,22 @@
+[input]
+run_dir = "scripts/arnold/runs_calibration/run_052"
+
+[output]
+output_dir = "scripts/arnold/runs_calibration/run_052/publication_figures"
+convergence_basename = "calibration_convergence_publication"
+gap_basename = "observable_gap_norm_publication"
+
+[style]
+dpi = 300
+fontfamily = "Computer Modern"
+convergence_width = 3200
+convergence_height = 2250
+gap_width = 1950
+gap_height = 1080
+line_width = 2.8
+reference_line_width = 1.8
+marker_size = 7.2
+title_font_size = 18
+guide_font_size = 17
+tick_font_size = 15
+legend_font_size = 16

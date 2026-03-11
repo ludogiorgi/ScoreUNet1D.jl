@@ -1,0 +1,44 @@
+[unet]
+predicted_residual_active = 0.15623472312321565
+step_cap_factor = 1.0
+cond_active_free = 7905.235464169486
+relative_step_applied = 0.0825065065652313
+step_cap_triggered = false
+theta_new = [0.4533749541973036, 5.105113611369661, -1.523041882830583, 0.15647302892468123, 0.3674339753402908]
+relative_step_unclipped = 0.0825065065652313
+stable_rollout = true
+gfdt_residual_active = 0.8643856691535685
+damping_effective = 1.0
+gamma_effective = 0.01
+delta_theta = [-0.07776303841093808, 0.17437895981785648, -0.027032140354796872, -0.0056800216458051285, 0.417356758671329]
+damping_requested = 1.0
+
+[finite_difference]
+predicted_residual_active = 0.10174219986840204
+step_cap_factor = 1.0
+cond_active_free = 1670.3112757262588
+relative_step_applied = 0.07743587110273648
+step_cap_triggered = false
+theta_new = [0.422894824885048, 5.2026451485081395, -1.4100445711163938, 0.12338283485482998, 0.38765384011759074]
+relative_step_unclipped = 0.07743587110273648
+stable_rollout = true
+gfdt_residual_active = 0.8643856691535685
+damping_effective = 1.0
+gamma_effective = 0.01
+delta_theta = [-0.047282909098682456, 0.07684742267937794, -0.14002945206898598, 0.027410172424046114, 0.39713689389402906]
+damping_requested = 1.0
+
+[gaussian]
+predicted_residual_active = 0.5032878437614438
+step_cap_factor = 0.42488542908475846
+cond_active_free = 24937.62618572087
+relative_step_applied = 0.05000000000000001
+step_cap_triggered = true
+theta_new = [0.5883548040840589, 5.390249765194861, -1.6394531148374938, 0.1597504507608978, 0.6750493279753452]
+relative_step_unclipped = 0.11767878250780336
+stable_rollout = true
+gfdt_residual_active = 0.8643856691535685
+damping_effective = 0.42488542908475846
+gamma_effective = 0.01
+delta_theta = [-0.21274288829769342, -0.11075719400734362, 0.0893790916521139, -0.008957443482021718, 0.10974140603627454]
+damping_requested = 1.0

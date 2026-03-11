@@ -1,0 +1,21 @@
+dataset_path = "/home/ludogio/Documents/JuliaProjects/ScoreUNet1D.jl/scripts/arnold_K36/data/l96_k36_observations.hdf5"
+dt_obs = 1.0
+dataset_key = "x_two_scale_observed"
+generated = true
+parameters_file = "/home/ludogio/Documents/JuliaProjects/ScoreUNet1D.jl/scripts/arnold_K36/parameters_observations.toml"
+params_signature = "dbb69d2ffb6c1fe2d999c834fb833de8ed1643f3"
+
+[twoscale]
+J = 10
+c = 10.0
+b = 8.0
+dt = 0.005
+K = 36
+h = 2.0
+F = 10.0
+
+[data]
+spinup_steps = 3000
+save_every = 200
+rng_seed = 123
+nsamples = 30000

@@ -1,0 +1,7 @@
+theta_reference = [0.14937746851445197, 0.39447150979547196, -0.008426766431124878, -0.0016716747838000485, 1.0359301191171504]
+gfdt_data_path = "/home/ludogio/Documents/JuliaProjects/ScoreUNet1D.jl/scripts/arnold/runs_calibration/run_050/method_unet/iter_001/data/gfdt_stochastic.hdf5"
+run_dir = "/home/ludogio/Documents/JuliaProjects/ScoreUNet1D.jl/scripts/arnold/runs_calibration/run_050"
+iteration = 1
+mode = "postprocess_saved_iteration"
+checkpoint_path = "/home/ludogio/Documents/JuliaProjects/ScoreUNet1D.jl/scripts/arnold/runs_calibration/run_050/method_unet/iter_001/model/final_checkpoint.bson"
+train_data_path = "/home/ludogio/Documents/JuliaProjects/ScoreUNet1D.jl/scripts/arnold/runs_calibration/run_050/method_unet/iter_001/data/train_stochastic.hdf5"

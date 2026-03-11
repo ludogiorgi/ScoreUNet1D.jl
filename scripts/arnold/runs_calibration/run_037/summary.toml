@@ -1,0 +1,27 @@
+free_parameters = [1, 2, 3, 4, 5]
+iterations = 10
+run_dir = "/home/ludogio/Documents/JuliaProjects/ScoreUNet1D.jl/scripts/arnold/runs_calibration/run_037"
+converged = false
+convergence_metric = 0.07243492722122816
+obs_residual_primary = 0.28325525206646796
+active_observables = [1, 2, 3, 4, 5]
+
+[final_theta]
+sigma = 1.3434164008529865
+alpha2 = -3.1173277487975435
+alpha1 = 7.2711601115996265
+alpha3 = 0.38109298846530915
+alpha0 = 1.2193167744288398
+
+[methods]
+primary = "unet"
+unet = true
+finite_difference = true
+gaussian = true
+
+[target_observables]
+phi3_mean_x_xp1 = 5.665295252873647
+phi5_mean_x_xp3 = 3.82821793891631
+phi4_mean_x_xp2 = 2.7665503180877846
+phi2_mean_x2 = 8.508138220307355
+phi1_mean_x = 2.3145328168132173

@@ -1,0 +1,36 @@
+primary_method_requested = "unet"
+observable_residual_primary = 1.4009395832741598
+primary_method = "unet"
+convergence_metric_primary = 0.26634849221741436
+iteration = 5
+inactive_methods = []
+theta_primary = [2.029322145971123, 1.5337210926868463, -0.12842952030086707, 0.0035936067115473463, 1.196867336070552]
+
+[per_method.unet]
+relative_step = 0.26634849221741436
+observable_residual = 1.4009395832741598
+observable_residual_unweighted = 1.4009395832741598
+train_data_path = "/home/ludogio/Documents/JuliaProjects/ScoreUNet1D.jl/scripts/arnold/runs_calibration/run_030/method_unet/iter_005/data/train_stochastic.hdf5"
+gfdt_data_path = "/home/ludogio/Documents/JuliaProjects/ScoreUNet1D.jl/scripts/arnold/runs_calibration/run_030/method_unet/iter_005/data/gfdt_stochastic.hdf5"
+jacobian_cond_active_free = 809594.3509855936
+checkpoint_path = "/home/ludogio/Documents/JuliaProjects/ScoreUNet1D.jl/scripts/arnold/runs_calibration/run_030/method_unet/iter_005/model/final_checkpoint.bson"
+theta_before = [1.4552426429336691, 1.682867448271334, -0.08986719102361812, -0.0004487771429599139, 1.6534878720104083]
+theta_proposed = [2.029322145971123, 1.5337210926868463, -0.12842952030086707, 0.0035936067115473463, 1.196867336070552]
+delta_theta = [-0.5740795030374538, 0.1491463555844877, 0.03856232927724895, -0.00404238385450726, 0.4566205359398562]
+
+    [per_method.unet.newton]
+    raw_cond = 1.046941831034431e10
+    raw_rhs_norm = 1345.4247741318004
+    weight_matrix_mode = "identity"
+    residual_before = 1.410355142312687
+    stability_accepted = true
+    line_search_accepted = true
+    free_parameters = [1, 2, 3, 4, 5]
+    line_search_scale = 0.5
+    applied_step = [-0.5740795030374538, 0.1491463555844877, 0.03856232927724895, -0.00404238385450726, 0.4566205359398562]
+    residual_before_unweighted = 1.4103551423126872
+    residual_after = 1.3012166721958927
+    line_search_used = true
+    stability_checked = true
+    active_observables = [1, 2, 3, 4, 5]
+    correction_full = [-1.1481590060749076, 0.2982927111689754, 0.0771246585544979, -0.00808476770901452, 0.9132410718797124]

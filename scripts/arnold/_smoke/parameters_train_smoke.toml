@@ -14,8 +14,8 @@ spinup_steps = 2000
 save_every = 50
 nsamples = 5000
 rng_seed = 101
-process_noise_sigma = 0.0
-stochastic_x_noise = false
+process_noise_sigma_y = 0.0
+process_noise_sigma_x = 0.0
 target_spacing = 0.25
 
 [train]

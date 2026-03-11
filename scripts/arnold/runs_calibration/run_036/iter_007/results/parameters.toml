@@ -1,0 +1,9 @@
+theta_history_length = 8
+iteration = 7
+
+[theta]
+sigma = 0.7845923881275383
+alpha2 = -1.7705973206562022
+alpha1 = 6.264878268269947
+alpha3 = 0.1453071222938755
+alpha0 = 0.3490950015055427

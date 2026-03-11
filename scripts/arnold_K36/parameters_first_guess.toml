@@ -1,0 +1,49 @@
+[paths]
+observations_hdf5 = "scripts/arnold_K36/data/l96_k36_observations.hdf5"
+observations_key = "x_two_scale_observed"
+output_dir = "scripts/arnold_K36/output/first_guess"
+reduced_hdf5 = "scripts/arnold_K36/output/first_guess/reduced_first_guess.hdf5"
+reduced_key = "x_reduced_first_guess"
+first_guess_toml = "scripts/arnold_K36/output/first_guess/first_guess_parameters.toml"
+summary_toml = "scripts/arnold_K36/output/first_guess/first_guess_summary.toml"
+
+[fit]
+F = 10.0
+fit_start_index = 2
+fit_samples = 20_000
+fit_min_samples = 5_000
+sigma_floor = 1e-8
+sigma_scale = 0.4215
+sigma_cap = 12.0
+
+[stability]
+screen_samples = 20_000
+screen_spinup_steps = 2_000
+screen_save_every = 200
+screen_rng_seed = 444
+screen_trajectories = 4
+parallel_trajectories = true
+allow_sigma_backoff = true
+sigma_backoff_factor = 0.8
+max_sigma_backoffs = 5
+max_abs_state = 10000.0
+state_min = -250.0
+state_max = 250.0
+max_boundary_hits = 80
+
+[reduced_long]
+nsamples = 40_000
+spinup_steps = 3_000
+save_every = 200
+rng_seed = 777
+trajectories = 4
+parallel_trajectories = true
+
+[observables]
+m = 3
+compare_samples = 20_000
+
+[figures]
+pdf_bins = 80
+max_acf_lag = 200
+figB_path = "scripts/arnold_K36/output/first_guess/figB_stats_deterministic_vs_stochastic_4x2.png"

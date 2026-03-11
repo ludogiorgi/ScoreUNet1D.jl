@@ -1,0 +1,34 @@
+primary_method_requested = "unet"
+observable_residual_primary = 1.3494508132004275
+primary_method = "unet"
+convergence_metric_primary = 0.039492145504023364
+iteration = 8
+inactive_methods = ["finite_difference", "gaussian"]
+theta_primary = [1.7582134381219312, 1.6515649817929423, -0.11675140021176258, 0.002051603171026576, 1.9157154288602343]
+
+[per_method.unet]
+gfdt_data_path = "/home/ludogio/Documents/JuliaProjects/ScoreUNet1D.jl/scripts/arnold/runs_calibration/run_025/method_unet/iter_008/data/gfdt_stochastic.hdf5"
+jacobian_cond_active_free = 251334.1225095595
+relative_step = 0.039492145504023364
+observable_residual = 1.3494508132004275
+theta_before = [1.6725440542168097, 1.6380906168466274, -0.1138068082034041, 0.002129494761252791, 2.0011029533932523]
+checkpoint_path = "/home/ludogio/Documents/JuliaProjects/ScoreUNet1D.jl/scripts/arnold/runs_calibration/run_025/method_unet/iter_008/model/final_checkpoint.bson"
+theta_proposed = [1.7582134381219312, 1.6515649817929423, -0.11675140021176258, 0.002051603171026576, 1.9157154288602343]
+delta_theta = [-0.08566938390512142, -0.013474364946315018, 0.0029445920083584843, 7.789159022621484e-5, 0.0853875245330181]
+train_data_path = "/home/ludogio/Documents/JuliaProjects/ScoreUNet1D.jl/scripts/arnold/runs_calibration/run_025/method_unet/iter_008/data/train_stochastic.hdf5"
+
+    [per_method.unet.newton]
+    raw_cond = 2.4526053569168642e8
+    raw_rhs_norm = 108.426807682223
+    weight_matrix_mode = "inverse_cov"
+    residual_before = 1.6309974068747344
+    stability_accepted = true
+    line_search_accepted = true
+    free_parameters = [1, 2, 3, 4, 5]
+    line_search_scale = 0.2
+    applied_step = [-0.08566938390512142, -0.013474364946315018, 0.0029445920083584843, 7.789159022621484e-5, 0.0853875245330181]
+    residual_after = 1.4773520959002635
+    line_search_used = true
+    stability_checked = true
+    active_observables = [1, 2, 3, 4, 5, 6]
+    correction_full = [-0.4283469195256071, -0.06737182473157509, 0.01472296004179242, 0.0003894579511310742, 0.42693762266509044]

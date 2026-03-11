@@ -1,0 +1,121 @@
+# ──────────────────────────────────────────────────────
+# Parameter calibration configuration (fast profile)
+# ──────────────────────────────────────────────────────
+
+[paths]
+data_params = "scripts/arnold/parameters_data.toml"
+train_params = "scripts/arnold/parameters_train.toml"
+responses_params = "scripts/arnold/parameters_responses.toml"
+runs_root = "scripts/arnold/runs_calibration"
+
+[truth]
+# Keep target-observable estimation unchanged to preserve calibration target quality.
+source = "two_scale"
+nsamples = 200_000
+spinup_steps = 2_000
+rng_seed = 101
+save_every = 200
+
+[initial_theta]
+alpha0 = 0.3751
+alpha1 = 1.43
+alpha2 = -0.01224
+alpha3 = -0.002115
+sigma = 2.75
+perturbation_fraction = 0.0
+
+[observables]
+# Total observables = m + 2 (mean, second moment, lags 1..m).
+m = 3
+
+[calibration]
+max_iterations = 30
+tol_theta = 1e-3
+tol_obs = 5e-3
+damping = 1.0
+line_search = true
+line_search_max = 3
+regularization_gamma = 1e-3
+weight_matrix = "identity"
+
+# Match the same calibrated subset as the default file.
+free_parameters = [1, 2, 3, 4, 5]
+active_observables = [1, 2, 3, 4, 5]
+
+[methods]
+# UNet-only mode is much faster and keeps the primary update path unchanged.
+unet = true
+gaussian = false
+finite_difference = false
+
+[datasets]
+# Moderate reduction in stochastic sample counts to keep quality close while
+# significantly reducing per-iteration runtime.
+train_nsamples = 250_000
+train_save_every = 200
+train_rng_seed_base = 2000
+train_ensemble_trajectories = 12
+train_parallel_trajectories = true
+
+gfdt_nsamples = 250_000
+gfdt_save_every = 2
+gfdt_rng_seed_base = 3000
+
+[training]
+# Fewer epochs with warm starts gives a strong speedup while preserving accuracy.
+epochs = 12
+device = "GPU:1"
+resume_from_previous = true
+
+[responses]
+response_tmax = 5.0
+mean_center = true
+impulse_tail_debias = true
+impulse_tail_taper = "hard"
+t_start = 2.0
+t_end = 5.0
+apply_score_correction = true
+divergence_mode = "hutchinson"
+divergence_eps = 0.03
+divergence_probes = 6
+score_device = "GPU:1"
+batch_size = 1024
+
+[responses.finite_difference]
+# Kept for compatibility if finite differences are later enabled.
+nsamples = 3_000_000
+spinup = 2_000
+h_abs = [0.05, 0.02, 0.01, 0.002, 0.05]
+h_rel = 0.005
+seed_base = 50_000_000
+use_ensemble = true
+ensemble_trajectories = 12
+samples_per_trajectory = 6_000
+save_every = 200
+parallel_trajectories = true
+
+[observables_ensemble]
+# Used for convergence diagnostics and line-search evaluations.
+trajectories = 12
+samples_per_trajectory = 4_000
+save_every = 200
+spinup_steps = 1_000
+seed_base = 60_000_000
+parallel_trajectories = true
+
+[numerical]
+state_min = -200.0
+state_max = 200.0
+max_boundary_hits = 200
+
+[figures]
+dpi = 180
+save_per_iteration = true
+save_convergence = true
+
+[performance]
+parallel_methods = true
+parallel_fd_columns = true
+parallel_line_search = true
+max_parallel_line_search = 2
+allow_nested_parallel = true

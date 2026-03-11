@@ -1,0 +1,165 @@
+# Runtime smoke test for calibration orchestration.
+
+[paths]
+data_params = "scripts/arnold/parameters_data.toml"
+train_params = "scripts/arnold/parameters_train.toml"
+responses_params = "scripts/arnold/parameters_responses.toml"
+runs_root = "scripts/arnold/_smoke/runs_calibration"
+
+[run]
+run_id_padding = 3
+seed_stride = 1_000_000
+seed_offset = 0
+
+[truth]
+source = "two_scale"
+nsamples = 1_000
+spinup_steps = 500
+rng_seed = 123
+save_every = 200
+
+[twoscale]
+K = 36
+J = 10
+F = 10.0
+h = 1.0
+c = 10.0
+b = 10.0
+dt = 0.005
+process_noise_sigma_y = 0.0
+process_noise_sigma_x = 1.0
+
+[closure]
+F = 10.0
+alpha0_initial = 0.04636738678495637
+alpha1_initial = 0.3660714354042205
+alpha2_initial = 0.011016434610840226
+alpha3_initial = -0.0019401319945469076
+sigma_initial = 0.41443993804139906
+auto_fit = true
+fit_dataset_role = "two_scale_fit"
+fit_start_index = 2
+fit_samples = 5_000
+fit_min_samples = 500
+
+[initial_theta]
+alpha0 = 0.04636738678495637
+alpha1 = 0.3660714354042205
+alpha2 = 0.011016434610840226
+alpha3 = -0.0019401319945469076
+sigma = 0.41443993804139906
+perturbation_fraction = 0.0
+
+[observables]
+m = 2
+
+[calibration]
+max_iterations = 1
+tol_theta = 1e-3
+tol_obs = 5e-3
+damping = 1.0
+line_search = true
+line_search_max = 1
+regularization_gamma = 1e-2
+lm_max_attempts = 2
+lm_growth_factor = 10.0
+min_actual_to_predicted_ratio = 0.1
+max_relative_step = 0.0
+conditioning_step_threshold = 1e4
+conditioned_max_relative_step = 5e-2
+postcheck_rel_tol = 0.05
+postcheck_abs_tol = 1e-3
+convergence_scope = "primary"
+weight_matrix = "identity"
+apply_sigma_jacobian_mask = false
+free_parameters = [1, 2, 3, 4, 5]
+active_observables = [1, 2, 3, 4]
+freeze_parameters = []
+freeze_steps = 0
+
+[methods]
+unet = true
+gaussian = true
+finite_difference = true
+
+[datasets]
+train_nsamples = 4_000
+train_save_every = 200
+train_rng_seed_base = 2_000
+train_ensemble_trajectories = 4
+train_parallel_trajectories = true
+
+gfdt_nsamples = 4_000
+gfdt_save_every = 2
+gfdt_rng_seed_base = 3_000
+
+[training]
+epochs = 1
+device = "CPU"
+resume_from_previous = false
+
+[responses]
+response_tmax = 1.0
+mean_center = true
+impulse_tail_debias = true
+impulse_tail_taper = "hard"
+t_start = 0.4
+t_end = 1.0
+apply_score_correction = true
+divergence_mode = "hutchinson"
+divergence_eps = 0.03
+divergence_probes = 2
+score_device = "CPU"
+batch_size = 256
+
+[responses.finite_difference]
+nsamples = 2_000
+spinup = 500
+h_abs = [0.05, 0.02, 0.01, 0.002, 0.02]
+h_rel = 0.005
+seed_base = 50_000_000
+use_ensemble = true
+ensemble_trajectories = 4
+samples_per_trajectory = 500
+save_every = 200
+parallel_trajectories = true
+
+[observables_ensemble]
+trajectories = 4
+samples_per_trajectory = 500
+save_every = 200
+spinup_steps = 500
+seed_base = 60_000_000
+parallel_trajectories = true
+
+[numerical]
+state_min = -200.0
+state_max = 200.0
+max_boundary_hits = 100
+
+[figures]
+dpi = 120
+save_per_iteration = false
+save_convergence = false
+save_langevin_stats = false
+langevin_device = "CPU"
+langevin_dt = 0.005
+langevin_resolution = 100
+langevin_nsteps = 1_000
+langevin_burn_in = 200
+langevin_ensembles = 16
+langevin_seed_base = 70_000_000
+langevin_use_boundary = true
+langevin_boundary_min = -200.0
+langevin_boundary_max = 200.0
+langevin_max_samples = 1_000
+langevin_pdf_bins = 40
+langevin_max_acf_lag = 50
+
+[performance]
+parallel_methods = true
+max_parallel_methods = 2
+parallel_fd_columns = true
+parallel_line_search = true
+max_parallel_line_search = 2
+allow_nested_parallel = true

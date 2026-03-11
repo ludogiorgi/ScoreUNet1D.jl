@@ -26,6 +26,7 @@ export mod1idx,
     resolve_closure_theta,
     load_role_x_matrix,
     next_run_dir,
+    claim_next_run_dir,
     create_run_scaffold,
     list_checkpoints,
     wait_for_checkpoint,
@@ -68,6 +69,44 @@ function append_log(path::AbstractString, msg::AbstractString)
     return nothing
 end
 
+function _path_lock_dir(path::AbstractString)
+    return String(path) * ".lockdir"
+end
+
+function with_path_lock(path::AbstractString, f::Function; poll_seconds::Float64=0.25, timeout_seconds::Float64=14_400.0)
+    lock_dir = _path_lock_dir(path)
+    mkpath(dirname(lock_dir))
+    t0 = time()
+
+    while true
+        try
+            mkdir(lock_dir)
+            break
+        catch err
+            if isdir(lock_dir)
+                if time() - t0 > timeout_seconds
+                    error("Timed out waiting for filesystem lock '$lock_dir'")
+                end
+                sleep(poll_seconds)
+                continue
+            end
+            rethrow(err)
+        end
+    end
+
+    try
+        return f()
+    finally
+        if isdir(lock_dir)
+            rm(lock_dir; recursive=true, force=true)
+        end
+    end
+end
+
+function with_path_lock(f::Function, path::AbstractString; poll_seconds::Float64=0.25, timeout_seconds::Float64=14_400.0)
+    return with_path_lock(path, f; poll_seconds=poll_seconds, timeout_seconds=timeout_seconds)
+end
+
 function parse_bool(x)
     if x isa Bool
         return x
@@ -98,7 +137,10 @@ function read_keyval_metrics(path::AbstractString)
     return out
 end
 
-const ARNOLD_DATASET_ROLES = ("two_scale_observed", "train_stochastic", "gfdt_stochastic")
+const REQUIRED_ARNOLD_DATASET_ROLES = ("two_scale_observed", "train_stochastic", "gfdt_stochastic")
+const OPTIONAL_ARNOLD_DATASET_ROLES = ("two_scale_fit",)
+const ARNOLD_DATASET_ROLES = (REQUIRED_ARNOLD_DATASET_ROLES..., OPTIONAL_ARNOLD_DATASET_ROLES...)
+const TWO_SCALE_DATASET_ROLES = ("two_scale_observed", "two_scale_fit")
 const _AUTO_FIT_CACHE = Dict{String,NamedTuple{(:theta, :meta),Tuple{NTuple{5,Float64},Dict{String,Any}}}}()
 
 _as_int(tbl::Dict{String,Any}, key::String, default) = Int(get(tbl, key, default))
@@ -118,6 +160,14 @@ function _as_subtable(tbl::Dict{String,Any}, key::String)
     return Dict{String,Any}(tbl[key])
 end
 
+function _maybe_subtable(tbl::Dict{String,Any}, key::String)
+    if !haskey(tbl, key)
+        return Dict{String,Any}()
+    end
+    tbl[key] isa AbstractDict || error("[$key] must be TOML table")
+    return Dict{String,Any}(tbl[key])
+end
+
 function _check_role(role::AbstractString)
     role_s = String(role)
     role_s in ARNOLD_DATASET_ROLES || error("Unknown dataset role '$role_s'. Valid roles: $(join(ARNOLD_DATASET_ROLES, ", "))")
@@ -133,6 +183,11 @@ function load_data_config(path::AbstractString)
     closure = _as_table(doc, "closure")
     datasets = _as_table(doc, "datasets")
 
+    legacy_process_noise_sigma = _as_float(twoscale, "process_noise_sigma", 0.0)
+    legacy_stochastic_x_noise = _as_bool(twoscale, "stochastic_x_noise", false)
+    process_noise_sigma_y = _as_float(twoscale, "process_noise_sigma_y", legacy_process_noise_sigma)
+    process_noise_sigma_x = _as_float(twoscale, "process_noise_sigma_x", legacy_stochastic_x_noise ? legacy_process_noise_sigma : 0.0)
+
     cfg = Dict{String,Any}(
         "paths.parameters_data_path" => abspath(path),
         "paths.datasets_hdf5" => abspath(_as_str(paths, "datasets_hdf5", "scripts/arnold/data/l96_arnold_datasets.hdf5")),
@@ -144,8 +199,10 @@ function load_data_config(path::AbstractString)
         "twoscale.c" => _as_float(twoscale, "c", 10.0),
         "twoscale.b" => _as_float(twoscale, "b", 10.0),
         "twoscale.dt" => _as_float(twoscale, "dt", 0.005),
-        "twoscale.process_noise_sigma" => _as_float(twoscale, "process_noise_sigma", 0.0),
-        "twoscale.stochastic_x_noise" => _as_bool(twoscale, "stochastic_x_noise", false),
+        "twoscale.process_noise_sigma" => process_noise_sigma_y,
+        "twoscale.process_noise_sigma_y" => process_noise_sigma_y,
+        "twoscale.process_noise_sigma_x" => process_noise_sigma_x,
+        "twoscale.stochastic_x_noise" => process_noise_sigma_x > 0.0,
 
         "closure.F" => _as_float(closure, "F", _as_float(twoscale, "F", 20.0)),
         "closure.alpha0_initial" => _as_float(closure, "alpha0_initial", _as_float(closure, "alpha0", 0.0)),
@@ -154,13 +211,13 @@ function load_data_config(path::AbstractString)
         "closure.alpha3_initial" => _as_float(closure, "alpha3_initial", _as_float(closure, "alpha3", 0.0)),
         "closure.sigma_initial" => _as_float(closure, "sigma_initial", _as_float(closure, "sigma", 1.0)),
         "closure.auto_fit" => _as_bool(closure, "auto_fit", true),
-        "closure.fit_dataset_role" => _as_str(closure, "fit_dataset_role", "two_scale_observed"),
+        "closure.fit_dataset_role" => _as_str(closure, "fit_dataset_role", "two_scale_fit"),
         "closure.fit_start_index" => _as_int(closure, "fit_start_index", 2),
         "closure.fit_samples" => _as_int(closure, "fit_samples", 50_000),
         "closure.fit_min_samples" => _as_int(closure, "fit_min_samples", 500),
     )
 
-    for role in ARNOLD_DATASET_ROLES
+    for role in REQUIRED_ARNOLD_DATASET_ROLES
         tbl = _as_subtable(datasets, role)
         cfg["datasets.$role.key"] = _as_str(tbl, "key", role)
         cfg["datasets.$role.spinup_steps"] = _as_int(tbl, "spinup_steps", 50_000)
@@ -168,13 +225,28 @@ function load_data_config(path::AbstractString)
         cfg["datasets.$role.nsamples"] = _as_int(tbl, "nsamples", 100_000)
         cfg["datasets.$role.rng_seed"] = _as_int(tbl, "rng_seed", 11)
         cfg["datasets.$role.target_spacing"] = _as_float(tbl, "target_spacing", dataset_time_spacing(cfg["twoscale.dt"], cfg["datasets.$role.save_every"]))
+        cfg["datasets.$role.ensemble_trajectories"] = _as_int(tbl, "ensemble_trajectories", 1)
+        cfg["datasets.$role.parallel_trajectories"] = _as_bool(tbl, "parallel_trajectories", false)
+    end
+
+    fit_nsamples_default = max(cfg["closure.fit_start_index"] + cfg["closure.fit_samples"], 50_000)
+    for role in OPTIONAL_ARNOLD_DATASET_ROLES
+        tbl = _maybe_subtable(datasets, role)
+        cfg["datasets.$role.key"] = _as_str(tbl, "key", role)
+        cfg["datasets.$role.spinup_steps"] = _as_int(tbl, "spinup_steps", cfg["datasets.two_scale_observed.spinup_steps"])
+        cfg["datasets.$role.save_every"] = _as_int(tbl, "save_every", 2)
+        cfg["datasets.$role.nsamples"] = _as_int(tbl, "nsamples", fit_nsamples_default)
+        cfg["datasets.$role.rng_seed"] = _as_int(tbl, "rng_seed", cfg["datasets.two_scale_observed.rng_seed"])
+        cfg["datasets.$role.target_spacing"] = _as_float(tbl, "target_spacing", dataset_time_spacing(cfg["twoscale.dt"], cfg["datasets.$role.save_every"]))
+        cfg["datasets.$role.ensemble_trajectories"] = _as_int(tbl, "ensemble_trajectories", 1)
+        cfg["datasets.$role.parallel_trajectories"] = _as_bool(tbl, "parallel_trajectories", false)
     end
 
     cfg["twoscale.K"] >= 2 || error("twoscale.K must be >= 2")
     cfg["twoscale.J"] >= 1 || error("twoscale.J must be >= 1")
     cfg["twoscale.dt"] > 0 || error("twoscale.dt must be > 0")
     cfg["closure.fit_dataset_role"] = _check_role(cfg["closure.fit_dataset_role"])
-    cfg["closure.fit_dataset_role"] == "two_scale_observed" || error("closure.fit_dataset_role must be 'two_scale_observed' to satisfy auto_fit against bi-scale data")
+    cfg["closure.fit_dataset_role"] in TWO_SCALE_DATASET_ROLES || error("closure.fit_dataset_role must reference a deterministic two-scale dataset role")
     cfg["closure.fit_samples"] >= 10 || error("closure.fit_samples must be >= 10")
     cfg["closure.fit_min_samples"] >= 10 || error("closure.fit_min_samples must be >= 10")
 
@@ -182,6 +254,7 @@ function load_data_config(path::AbstractString)
         cfg["datasets.$role.spinup_steps"] >= 0 || error("datasets.$role.spinup_steps must be >= 0")
         cfg["datasets.$role.save_every"] >= 1 || error("datasets.$role.save_every must be >= 1")
         cfg["datasets.$role.nsamples"] >= 2 || error("datasets.$role.nsamples must be >= 2")
+        cfg["datasets.$role.ensemble_trajectories"] >= 1 || error("datasets.$role.ensemble_trajectories must be >= 1")
     end
 
     return cfg, doc
@@ -195,17 +268,20 @@ end
 function _dataset_role_signature(cfg::Dict{String,Any}, role::String; closure_theta::Union{Nothing,NTuple{5,Float64}}=nothing)
     role_s = _check_role(role)
     base = Dict{String,Any}(
+        "equations_version" => "two_scale_l96_hc_over_J",
         "role" => role_s,
         "dataset_key" => cfg["datasets.$role_s.key"],
         "spinup_steps" => cfg["datasets.$role_s.spinup_steps"],
         "save_every" => cfg["datasets.$role_s.save_every"],
         "nsamples" => cfg["datasets.$role_s.nsamples"],
         "rng_seed" => cfg["datasets.$role_s.rng_seed"],
+        "ensemble_trajectories" => cfg["datasets.$role_s.ensemble_trajectories"],
+        "parallel_trajectories" => cfg["datasets.$role_s.parallel_trajectories"],
         "twoscale_dt" => cfg["twoscale.dt"],
         "twoscale_K" => cfg["twoscale.K"],
     )
 
-    if role_s == "two_scale_observed"
+    if role_s in TWO_SCALE_DATASET_ROLES
         base["model"] = "two_scale_deterministic"
         base["twoscale"] = Dict(
             "J" => cfg["twoscale.J"],
@@ -213,8 +289,8 @@ function _dataset_role_signature(cfg::Dict{String,Any}, role::String; closure_th
             "h" => cfg["twoscale.h"],
             "c" => cfg["twoscale.c"],
             "b" => cfg["twoscale.b"],
-            "process_noise_sigma" => cfg["twoscale.process_noise_sigma"],
-            "stochastic_x_noise" => cfg["twoscale.stochastic_x_noise"],
+            "process_noise_sigma_y" => cfg["twoscale.process_noise_sigma_y"],
+            "process_noise_sigma_x" => cfg["twoscale.process_noise_sigma_x"],
         )
     else
         base["model"] = "reduced_stochastic"
@@ -253,14 +329,16 @@ function load_role_x_matrix(cfg::Dict{String,Any}, role::AbstractString;
     ensure_arnold_dataset_role!(cfg, role_s)
     path = cfg["paths.datasets_hdf5"]
     key = cfg["datasets.$role_s.key"]
-    return h5open(path, "r") do h5
-        haskey(h5, key) || error("Dataset key '$key' not found in $path")
-        ds = h5[key]
-        n_total = size(ds, 1)
-        n_req = nsamples <= 0 ? n_total : nsamples
-        s_use, e_use = _load_role_bounds(ds, n_req, start_index, label)
-        raw = Float64.(ds[s_use:e_use, :])
-        permutedims(raw, (2, 1))
+    return with_path_lock(path) do
+        h5open(path, "r") do h5
+            haskey(h5, key) || error("Dataset key '$key' not found in $path")
+            ds = h5[key]
+            n_total = size(ds, 1)
+            n_req = nsamples <= 0 ? n_total : nsamples
+            s_use, e_use = _load_role_bounds(ds, n_req, start_index, label)
+            raw = Float64.(ds[s_use:e_use, :])
+            permutedims(raw, (2, 1))
+        end
     end
 end
 
@@ -274,7 +352,7 @@ function _fit_polynomial_closure(X::Matrix{Float64},
     ns = min(fit_samples, N - 2)
     ns >= fit_min_samples || error("Not enough samples for closure fit: need >= $fit_min_samples, got $ns")
 
-    start = max(2, Int(floor((N - ns) / 2)))
+    start = 2
     stop = start + ns - 1
 
     A = Array{Float64}(undef, ns * K, 4)
@@ -308,8 +386,72 @@ function _fit_polynomial_closure(X::Matrix{Float64},
 
     coeff = A \ bvec
     resid = bvec .- A * coeff
-    sigma_fit = std(resid) * sqrt(dt_obs)
-    return (coeff[1], coeff[2], coeff[3], coeff[4], max(sigma_fit, 1e-8))
+    resid_mat = reshape(resid, K, ns)
+    sigma_fit, sigma_meta = _estimate_effective_sigma_green_kubo(resid_mat, dt_obs)
+    theta_fit = (coeff[1], coeff[2], coeff[3], coeff[4], max(sigma_fit, 1e-8))
+    fit_meta = Dict{String,Any}(
+        "fit_window_start" => start,
+        "fit_window_stop" => stop,
+        "fit_window_samples" => ns,
+        "fit_dt_obs" => dt_obs,
+        "sigma_estimator" => sigma_meta,
+    )
+    return theta_fit, fit_meta
+end
+
+function _estimate_effective_sigma_green_kubo(resid_mat::Matrix{Float64}, dt_obs::Float64)
+    K, N = size(resid_mat)
+    N >= 2 || error("Need at least two residual samples to estimate sigma")
+    dt_obs > 0 || error("dt_obs must be > 0")
+
+    max_lag = min(N - 1, max(1, Int(floor(5.0 / dt_obs))))
+    acov = zeros(Float64, max_lag + 1)
+
+    for k in 1:K
+        rk = Float64.(view(resid_mat, k, :))
+        rk_center = rk .- mean(rk)
+        acov .+= xcorr_one_sided_unbiased_fft(rk_center, rk_center, max_lag)
+    end
+    acov ./= K
+
+    cutoff = max_lag
+    for lag in 1:max_lag
+        if acov[lag + 1] <= 0.0
+            cutoff = lag
+            break
+        end
+    end
+
+    integral = 0.5 * acov[1]
+    if cutoff >= 1
+        if cutoff > 1
+            integral += sum(acov[2:cutoff])
+        end
+        integral += 0.5 * acov[cutoff + 1]
+    end
+    integral *= dt_obs
+
+    sigma2 = 2.0 * max(integral, 0.0)
+    sigma = sqrt(sigma2)
+    sigma_fallback = std(vec(resid_mat)) * sqrt(dt_obs)
+    mode = "green_kubo"
+    if !(isfinite(sigma) && sigma > 1e-10)
+        sigma = max(sigma_fallback, 1e-8)
+        sigma2 = sigma^2
+        mode = "std_fallback"
+    end
+
+    meta = Dict{String,Any}(
+        "mode" => mode,
+        "dt_obs" => dt_obs,
+        "max_lag" => max_lag,
+        "cutoff_lag" => cutoff,
+        "cutoff_time" => cutoff * dt_obs,
+        "integrated_autocovariance" => integral,
+        "sigma_fallback" => sigma_fallback,
+        "lag0_covariance" => acov[1],
+    )
+    return sigma, meta
 end
 
 function resolve_closure_theta(cfg::Dict{String,Any}; force_refit::Bool=false)
@@ -334,6 +476,9 @@ function resolve_closure_theta(cfg::Dict{String,Any}; force_refit::Bool=false)
     end
 
     fit_role = cfg["closure.fit_dataset_role"]
+    fit_required_total = cfg["closure.fit_start_index"] + cfg["closure.fit_samples"]
+    fit_dataset_nsamples_key = "datasets.$fit_role.nsamples"
+    cfg[fit_dataset_nsamples_key] = max(Int(cfg[fit_dataset_nsamples_key]), fit_required_total)
     ensure_arnold_dataset_role!(cfg, fit_role)
     role_sig = _dataset_role_signature(cfg, fit_role)
     cache_key = dict_signature(Dict(
@@ -351,15 +496,17 @@ function resolve_closure_theta(cfg::Dict{String,Any}; force_refit::Bool=false)
         return cached.theta, copy(cached.meta)
     end
 
+    fit_load_start = max(1, cfg["closure.fit_start_index"] - 1)
+    fit_load_nsamples = cfg["closure.fit_samples"] + 2
     Xfit = load_role_x_matrix(
         cfg,
         fit_role;
-        nsamples=cfg["closure.fit_samples"],
-        start_index=cfg["closure.fit_start_index"],
+        nsamples=fit_load_nsamples,
+        start_index=fit_load_start,
         label="closure_auto_fit",
     )
     dt_obs = dataset_role_spacing(cfg, fit_role)
-    theta_fit = _fit_polynomial_closure(
+    theta_fit, fit_meta = _fit_polynomial_closure(
         Xfit,
         dt_obs,
         cfg["closure.F"];
@@ -374,7 +521,10 @@ function resolve_closure_theta(cfg::Dict{String,Any}; force_refit::Bool=false)
         "fit_dataset_role" => fit_role,
         "fit_start_index" => cfg["closure.fit_start_index"],
         "fit_samples" => cfg["closure.fit_samples"],
+        "fit_dataset_load_start_index" => fit_load_start,
+        "fit_dataset_load_samples" => fit_load_nsamples,
         "fit_dt_obs" => dt_obs,
+        "fit_details" => fit_meta,
     )
     _AUTO_FIT_CACHE[cache_key] = (theta=theta_fit, meta=copy(meta))
     return theta_fit, meta
@@ -385,105 +535,119 @@ function ensure_arnold_dataset_role!(cfg::Dict{String,Any}, role::AbstractString
     path = cfg["paths.datasets_hdf5"]
     key = cfg["datasets.$role_s.key"]
 
-    closure_theta = if role_s == "two_scale_observed"
-        nothing
-    else
-        theta, _ = resolve_closure_theta(cfg)
-        theta
+    closure_theta = nothing
+    closure_meta = Dict{String,Any}()
+    if !(role_s in TWO_SCALE_DATASET_ROLES)
+        closure_theta, closure_meta = resolve_closure_theta(cfg)
     end
 
     sig = _dataset_role_signature(cfg, role_s; closure_theta=closure_theta)
-    found_sig = read_dataset_signature(path, key)
-    if isfile(path) && found_sig == sig
+
+    return with_path_lock(path) do
+        found_sig = read_dataset_signature(path, key)
+        if isfile(path) && found_sig == sig
+            return Dict{String,Any}(
+                "role" => role_s,
+                "path" => path,
+                "key" => key,
+                "signature" => sig,
+                "generated" => false,
+            )
+        end
+
+        data = if role_s in TWO_SCALE_DATASET_ROLES
+            generate_two_scale_x_timeseries_ensemble(
+                K=cfg["twoscale.K"],
+                J=cfg["twoscale.J"],
+                F=cfg["twoscale.F"],
+                h=cfg["twoscale.h"],
+                c=cfg["twoscale.c"],
+                b=cfg["twoscale.b"],
+                dt=cfg["twoscale.dt"],
+                spinup_steps=cfg["datasets.$role_s.spinup_steps"],
+                save_every=cfg["datasets.$role_s.save_every"],
+                nsamples=cfg["datasets.$role_s.nsamples"],
+                rng_seed=cfg["datasets.$role_s.rng_seed"],
+                process_noise_sigma_y=cfg["twoscale.process_noise_sigma_y"],
+                process_noise_sigma_x=cfg["twoscale.process_noise_sigma_x"],
+                ensemble_trajectories=cfg["datasets.$role_s.ensemble_trajectories"],
+                parallel_trajectories=cfg["datasets.$role_s.parallel_trajectories"],
+            )
+        else
+            theta = closure_theta::NTuple{5,Float64}
+            generate_reduced_x_timeseries_ensemble(
+                K=cfg["twoscale.K"],
+                F=cfg["closure.F"],
+                alpha0=theta[1],
+                alpha1=theta[2],
+                alpha2=theta[3],
+                alpha3=theta[4],
+                sigma=theta[5],
+                dt=cfg["twoscale.dt"],
+                spinup_steps=cfg["datasets.$role_s.spinup_steps"],
+                save_every=cfg["datasets.$role_s.save_every"],
+                nsamples=cfg["datasets.$role_s.nsamples"],
+                rng_seed=cfg["datasets.$role_s.rng_seed"],
+                max_abs_state=1e4,
+                state_min=get(cfg, "numerical.state_min", -Inf),
+                state_max=get(cfg, "numerical.state_max", Inf),
+                max_boundary_hits=Int(get(cfg, "numerical.max_boundary_hits", 40)),
+                ensemble_trajectories=cfg["datasets.$role_s.ensemble_trajectories"],
+                parallel_trajectories=cfg["datasets.$role_s.parallel_trajectories"],
+            )
+        end
+
+        all(isfinite, data) || error("Generated dataset role '$role_s' contains non-finite values")
+
+        attrs = Dict{String,Any}(
+            "role" => role_s,
+            "model" => role_s in TWO_SCALE_DATASET_ROLES ? "two_scale_deterministic" : "reduced_stochastic",
+            "dt" => cfg["twoscale.dt"],
+            "save_every" => cfg["datasets.$role_s.save_every"],
+            "nsamples" => cfg["datasets.$role_s.nsamples"],
+            "spinup_steps" => cfg["datasets.$role_s.spinup_steps"],
+            "rng_seed" => cfg["datasets.$role_s.rng_seed"],
+            "params_signature" => sig,
+            "generated_at" => string(now()),
+            "source_parameters_data" => cfg["paths.parameters_data_path"],
+        )
+
+        if role_s in TWO_SCALE_DATASET_ROLES
+            attrs["K"] = cfg["twoscale.K"]
+            attrs["J"] = cfg["twoscale.J"]
+            attrs["F"] = cfg["twoscale.F"]
+            attrs["h"] = cfg["twoscale.h"]
+            attrs["c"] = cfg["twoscale.c"]
+            attrs["b"] = cfg["twoscale.b"]
+            attrs["process_noise_sigma"] = cfg["twoscale.process_noise_sigma_y"]
+            attrs["stochastic_x_noise"] = cfg["twoscale.process_noise_sigma_x"] > 0.0
+            attrs["process_noise_sigma_y"] = cfg["twoscale.process_noise_sigma_y"]
+            attrs["process_noise_sigma_x"] = cfg["twoscale.process_noise_sigma_x"]
+        else
+            theta = closure_theta::NTuple{5,Float64}
+            attrs["K"] = cfg["twoscale.K"]
+            attrs["F"] = cfg["closure.F"]
+            attrs["alpha0"] = theta[1]
+            attrs["alpha1"] = theta[2]
+            attrs["alpha2"] = theta[3]
+            attrs["alpha3"] = theta[4]
+            attrs["sigma"] = theta[5]
+            attrs["closure_auto_fit"] = cfg["closure.auto_fit"]
+            attrs["closure_fit_mode"] = get(closure_meta, "mode", "")
+            attrs["closure_fit_dataset_role"] = get(closure_meta, "fit_dataset_role", "")
+        end
+        attrs["ensemble_trajectories"] = cfg["datasets.$role_s.ensemble_trajectories"]
+        attrs["parallel_trajectories"] = cfg["datasets.$role_s.parallel_trajectories"]
+
+        save_x_dataset(path, key, data, attrs)
         return Dict{String,Any}(
             "role" => role_s,
             "path" => path,
             "key" => key,
             "signature" => sig,
-            "generated" => false,
+            "generated" => true,
         )
     end
-
-    data = if role_s == "two_scale_observed"
-        generate_two_scale_x_timeseries(
-            K=cfg["twoscale.K"],
-            J=cfg["twoscale.J"],
-            F=cfg["twoscale.F"],
-            h=cfg["twoscale.h"],
-            c=cfg["twoscale.c"],
-            b=cfg["twoscale.b"],
-            dt=cfg["twoscale.dt"],
-            spinup_steps=cfg["datasets.$role_s.spinup_steps"],
-            save_every=cfg["datasets.$role_s.save_every"],
-            nsamples=cfg["datasets.$role_s.nsamples"],
-            rng_seed=cfg["datasets.$role_s.rng_seed"],
-            process_noise_sigma=cfg["twoscale.process_noise_sigma"],
-            stochastic_x_noise=cfg["twoscale.stochastic_x_noise"],
-        )
-    else
-        theta, _ = resolve_closure_theta(cfg)
-        generate_reduced_x_timeseries(
-            K=cfg["twoscale.K"],
-            F=cfg["closure.F"],
-            alpha0=theta[1],
-            alpha1=theta[2],
-            alpha2=theta[3],
-            alpha3=theta[4],
-            sigma=theta[5],
-            dt=cfg["twoscale.dt"],
-            spinup_steps=cfg["datasets.$role_s.spinup_steps"],
-            save_every=cfg["datasets.$role_s.save_every"],
-            nsamples=cfg["datasets.$role_s.nsamples"],
-            rng_seed=cfg["datasets.$role_s.rng_seed"],
-        )
-    end
-
-    all(isfinite, data) || error("Generated dataset role '$role_s' contains non-finite values")
-
-    attrs = Dict{String,Any}(
-        "role" => role_s,
-        "model" => role_s == "two_scale_observed" ? "two_scale_deterministic" : "reduced_stochastic",
-        "dt" => cfg["twoscale.dt"],
-        "save_every" => cfg["datasets.$role_s.save_every"],
-        "nsamples" => cfg["datasets.$role_s.nsamples"],
-        "spinup_steps" => cfg["datasets.$role_s.spinup_steps"],
-        "rng_seed" => cfg["datasets.$role_s.rng_seed"],
-        "params_signature" => sig,
-        "generated_at" => string(now()),
-        "source_parameters_data" => cfg["paths.parameters_data_path"],
-    )
-
-    if role_s == "two_scale_observed"
-        attrs["K"] = cfg["twoscale.K"]
-        attrs["J"] = cfg["twoscale.J"]
-        attrs["F"] = cfg["twoscale.F"]
-        attrs["h"] = cfg["twoscale.h"]
-        attrs["c"] = cfg["twoscale.c"]
-        attrs["b"] = cfg["twoscale.b"]
-        attrs["process_noise_sigma"] = cfg["twoscale.process_noise_sigma"]
-        attrs["stochastic_x_noise"] = cfg["twoscale.stochastic_x_noise"]
-    else
-        theta, meta = resolve_closure_theta(cfg)
-        attrs["K"] = cfg["twoscale.K"]
-        attrs["F"] = cfg["closure.F"]
-        attrs["alpha0"] = theta[1]
-        attrs["alpha1"] = theta[2]
-        attrs["alpha2"] = theta[3]
-        attrs["alpha3"] = theta[4]
-        attrs["sigma"] = theta[5]
-        attrs["closure_auto_fit"] = cfg["closure.auto_fit"]
-        attrs["closure_fit_mode"] = get(meta, "mode", "")
-        attrs["closure_fit_dataset_role"] = get(meta, "fit_dataset_role", "")
-    end
-
-    save_x_dataset(path, key, data, attrs)
-    return Dict{String,Any}(
-        "role" => role_s,
-        "path" => path,
-        "key" => key,
-        "signature" => sig,
-        "generated" => true,
-    )
 end
 
 function ensure_arnold_datasets!(cfg::Dict{String,Any}; roles::Vector{String}=String[ARNOLD_DATASET_ROLES...])
@@ -521,6 +685,28 @@ function next_run_dir(root::AbstractString; pad::Int=3)
     run_name = "run_" * lpad(string(run_id), pad, '0')
     run_dir = joinpath(root, run_name)
     return (run_dir=run_dir, run_id=run_id, run_name=run_name)
+end
+
+function claim_next_run_dir(root::AbstractString; pad::Int=3, max_attempts::Int=10_000)
+    run_info = next_run_dir(root; pad=pad)
+    start_id = run_info.run_id - 1
+
+    for offset in 1:max_attempts
+        run_id = start_id + offset
+        run_name = "run_" * lpad(string(run_id), pad, '0')
+        run_dir = joinpath(root, run_name)
+        try
+            mkdir(run_dir)
+            return (run_dir=run_dir, run_id=run_id, run_name=run_name)
+        catch err
+            if isdir(run_dir)
+                continue
+            end
+            rethrow(err)
+        end
+    end
+
+    error("Could not reserve a unique run directory in '$root' after $max_attempts attempts")
 end
 
 function create_run_scaffold(run_dir::AbstractString)
@@ -619,7 +805,7 @@ function l96_two_scale_drift!(dx::AbstractVector{Float64},
     h::Float64,
     c::Float64,
     b::Float64)
-    coupling = h * c / b
+    coupling = h * c / J
 
     @inbounds for k in 1:K
         km2 = mod1idx(k - 2, K)
@@ -673,19 +859,22 @@ end
 function add_full_process_noise!(x::Vector{Float64},
     y::Matrix{Float64},
     rng::AbstractRNG,
-    sigma::Float64,
-    dt::Float64;
-    stochastic_x_noise::Bool=false)
-    sigma <= 0 && return nothing
-    step_sigma = sigma * sqrt(dt)
+    sigma_y::Float64,
+    sigma_x::Float64,
+    dt::Float64)
+    sigma_y <= 0 && sigma_x <= 0 && return nothing
+    step_sigma_y = sigma_y * sqrt(dt)
+    step_sigma_x = sigma_x * sqrt(dt)
     @inbounds begin
-        if stochastic_x_noise
+        if step_sigma_x > 0.0
             for k in eachindex(x)
-                x[k] += step_sigma * randn(rng)
+                x[k] += step_sigma_x * randn(rng)
             end
         end
-        for idx in eachindex(y)
-            y[idx] += step_sigma * randn(rng)
+        if step_sigma_y > 0.0
+            for idx in eachindex(y)
+                y[idx] += step_sigma_y * randn(rng)
+            end
         end
     end
     return nothing
@@ -702,8 +891,12 @@ function generate_two_scale_x_timeseries(;K::Int,
     save_every::Int,
     nsamples::Int,
     rng_seed::Int,
-    process_noise_sigma::Float64=0.0,
+    process_noise_sigma::Union{Nothing,Float64}=nothing,
+    process_noise_sigma_y::Union{Nothing,Float64}=nothing,
+    process_noise_sigma_x::Union{Nothing,Float64}=nothing,
     stochastic_x_noise::Bool=false)
+    sigma_y = process_noise_sigma_y === nothing ? (process_noise_sigma === nothing ? 0.0 : process_noise_sigma) : process_noise_sigma_y
+    sigma_x = process_noise_sigma_x === nothing ? ((process_noise_sigma === nothing || !stochastic_x_noise) ? 0.0 : process_noise_sigma) : process_noise_sigma_x
     rng = MersenneTwister(rng_seed)
     x = F .+ 0.01 .* randn(rng, Float64, K)
     y = 0.01 .* randn(rng, Float64, J, K)
@@ -711,16 +904,111 @@ function generate_two_scale_x_timeseries(;K::Int,
 
     for _ in 1:spinup_steps
         rk4_full_step!(x, y, dt, ws, K, J, F, h, c, b)
-        add_full_process_noise!(x, y, rng, process_noise_sigma, dt; stochastic_x_noise=stochastic_x_noise)
+        add_full_process_noise!(x, y, rng, sigma_y, sigma_x, dt)
     end
 
     out = Array{Float32}(undef, nsamples, K)
     for n in 1:nsamples
         for _ in 1:save_every
             rk4_full_step!(x, y, dt, ws, K, J, F, h, c, b)
-            add_full_process_noise!(x, y, rng, process_noise_sigma, dt; stochastic_x_noise=stochastic_x_noise)
+            add_full_process_noise!(x, y, rng, sigma_y, sigma_x, dt)
         end
         @inbounds out[n, :] .= Float32.(x)
+    end
+    return out
+end
+
+function generate_two_scale_x_timeseries_ensemble(;K::Int,
+    J::Int,
+    F::Float64,
+    h::Float64,
+    c::Float64,
+    b::Float64,
+    dt::Float64,
+    spinup_steps::Int,
+    save_every::Int,
+    nsamples::Int,
+    rng_seed::Int,
+    process_noise_sigma::Union{Nothing,Float64}=nothing,
+    process_noise_sigma_y::Union{Nothing,Float64}=nothing,
+    process_noise_sigma_x::Union{Nothing,Float64}=nothing,
+    stochastic_x_noise::Bool=false,
+    ensemble_trajectories::Int=1,
+    parallel_trajectories::Bool=false)
+    ensemble_trajectories >= 1 || error("ensemble_trajectories must be >= 1")
+    if ensemble_trajectories == 1
+        return generate_two_scale_x_timeseries(
+            K=K,
+            J=J,
+            F=F,
+            h=h,
+            c=c,
+            b=b,
+            dt=dt,
+            spinup_steps=spinup_steps,
+            save_every=save_every,
+            nsamples=nsamples,
+            rng_seed=rng_seed,
+            process_noise_sigma=process_noise_sigma,
+            process_noise_sigma_y=process_noise_sigma_y,
+            process_noise_sigma_x=process_noise_sigma_x,
+            stochastic_x_noise=stochastic_x_noise,
+        )
+    end
+
+    counts = fill(nsamples ÷ ensemble_trajectories, ensemble_trajectories)
+    for i in 1:(nsamples % ensemble_trajectories)
+        counts[i] += 1
+    end
+    parts = Vector{Matrix{Float32}}(undef, ensemble_trajectories)
+    errors = fill("", ensemble_trajectories)
+    seed_stride = 1_000_000
+
+    run_one! = function (itr::Int)
+        try
+            parts[itr] = generate_two_scale_x_timeseries(
+                K=K,
+                J=J,
+                F=F,
+                h=h,
+                c=c,
+                b=b,
+                dt=dt,
+                spinup_steps=spinup_steps,
+                save_every=save_every,
+                nsamples=counts[itr],
+                rng_seed=rng_seed + seed_stride * (itr - 1),
+                process_noise_sigma=process_noise_sigma,
+                process_noise_sigma_y=process_noise_sigma_y,
+                process_noise_sigma_x=process_noise_sigma_x,
+                stochastic_x_noise=stochastic_x_noise,
+            )
+        catch err
+            errors[itr] = sprint(showerror, err)
+        end
+        return nothing
+    end
+
+    if parallel_trajectories && nthreads() > 1
+        Threads.@threads for itr in 1:ensemble_trajectories
+            run_one!(itr)
+        end
+    else
+        for itr in 1:ensemble_trajectories
+            run_one!(itr)
+        end
+    end
+
+    for itr in 1:ensemble_trajectories
+        isempty(errors[itr]) || error("Two-scale ensemble trajectory $(itr) failed: $(errors[itr])")
+    end
+
+    out = Array{Float32}(undef, nsamples, K)
+    pos = 1
+    for part in parts
+        nrows = size(part, 1)
+        @views out[pos:(pos + nrows - 1), :] .= part
+        pos += nrows
     end
     return out
 end
@@ -738,9 +1026,17 @@ function generate_reduced_x_timeseries(;K::Int,
     nsamples::Int,
     rng_seed::Int,
     max_abs_state::Float64=1e4,
-    max_restarts::Int=8)
+    max_restarts::Int=8,
+    state_min::Float64=-Inf,
+    state_max::Float64=Inf,
+    max_boundary_hits::Int=40)
     max_abs_state > 0 || error("max_abs_state must be > 0")
     max_restarts >= 0 || error("max_restarts must be >= 0")
+    state_min <= state_max || error("state_min must be <= state_max")
+    max_boundary_hits >= 1 || error("max_boundary_hits must be >= 1")
+
+    use_bounds = isfinite(state_min) || isfinite(state_max)
+    boundary_hits = 0
 
     out = Array{Float32}(undef, nsamples, K)
     seed_stride = 10_000
@@ -751,10 +1047,19 @@ function generate_reduced_x_timeseries(;K::Int,
         x = F .+ 0.01 .* randn(rng, Float64, K)
         ws = make_reduced_workspace(K)
         stable = true
+        hit_boundary = false
 
         for _ in 1:spinup_steps
             l96_reduced_step!(x, dt, F, alpha0, alpha1, alpha2, alpha3, ws)
             add_reduced_noise!(x, rng, sigma, dt)
+            if use_bounds
+                if any(v -> (v <= state_min || v >= state_max), x)
+                    boundary_hits += 1
+                    hit_boundary = true
+                    stable = false
+                    break
+                end
+            end
             if !(all(isfinite, x) && maximum(abs, x) <= max_abs_state)
                 stable = false
                 break
@@ -766,6 +1071,14 @@ function generate_reduced_x_timeseries(;K::Int,
                 for _ in 1:save_every
                     l96_reduced_step!(x, dt, F, alpha0, alpha1, alpha2, alpha3, ws)
                     add_reduced_noise!(x, rng, sigma, dt)
+                    if use_bounds
+                        if any(v -> (v <= state_min || v >= state_max), x)
+                            boundary_hits += 1
+                            hit_boundary = true
+                            stable = false
+                            break
+                        end
+                    end
                     if !(all(isfinite, x) && maximum(abs, x) <= max_abs_state)
                         stable = false
                         break
@@ -777,10 +1090,114 @@ function generate_reduced_x_timeseries(;K::Int,
         end
 
         stable && return out
+        if hit_boundary && boundary_hits >= max_boundary_hits
+            error("Reduced trajectory hit bounds [$(state_min), $(state_max)] $(boundary_hits) times (limit=$(max_boundary_hits), base rng_seed=$(rng_seed))")
+        end
         attempt < max_restarts && @warn "Reduced trajectory became unstable; retrying with shifted seed" base_seed = rng_seed retry_seed = seed + seed_stride attempt = attempt + 1
     end
 
     error("Failed to generate stable reduced trajectory after $(max_restarts + 1) attempts (base rng_seed=$rng_seed)")
+end
+
+function generate_reduced_x_timeseries_ensemble(;K::Int,
+    F::Float64,
+    alpha0::Float64,
+    alpha1::Float64,
+    alpha2::Float64,
+    alpha3::Float64,
+    sigma::Float64,
+    dt::Float64,
+    spinup_steps::Int,
+    save_every::Int,
+    nsamples::Int,
+    rng_seed::Int,
+    max_abs_state::Float64=1e4,
+    max_restarts::Int=8,
+    state_min::Float64=-Inf,
+    state_max::Float64=Inf,
+    max_boundary_hits::Int=40,
+    ensemble_trajectories::Int=1,
+    parallel_trajectories::Bool=false)
+    ensemble_trajectories >= 1 || error("ensemble_trajectories must be >= 1")
+    if ensemble_trajectories == 1
+        return generate_reduced_x_timeseries(
+            K=K,
+            F=F,
+            alpha0=alpha0,
+            alpha1=alpha1,
+            alpha2=alpha2,
+            alpha3=alpha3,
+            sigma=sigma,
+            dt=dt,
+            spinup_steps=spinup_steps,
+            save_every=save_every,
+            nsamples=nsamples,
+            rng_seed=rng_seed,
+            max_abs_state=max_abs_state,
+            max_restarts=max_restarts,
+            state_min=state_min,
+            state_max=state_max,
+            max_boundary_hits=max_boundary_hits,
+        )
+    end
+
+    counts = fill(nsamples ÷ ensemble_trajectories, ensemble_trajectories)
+    for i in 1:(nsamples % ensemble_trajectories)
+        counts[i] += 1
+    end
+    parts = Vector{Matrix{Float32}}(undef, ensemble_trajectories)
+    errors = fill("", ensemble_trajectories)
+    seed_stride = 1_000_000
+
+    run_one! = function (itr::Int)
+        try
+            parts[itr] = generate_reduced_x_timeseries(
+                K=K,
+                F=F,
+                alpha0=alpha0,
+                alpha1=alpha1,
+                alpha2=alpha2,
+                alpha3=alpha3,
+                sigma=sigma,
+                dt=dt,
+                spinup_steps=spinup_steps,
+                save_every=save_every,
+                nsamples=counts[itr],
+                rng_seed=rng_seed + seed_stride * (itr - 1),
+                max_abs_state=max_abs_state,
+                max_restarts=max_restarts,
+                state_min=state_min,
+                state_max=state_max,
+                max_boundary_hits=max_boundary_hits,
+            )
+        catch err
+            errors[itr] = sprint(showerror, err)
+        end
+        return nothing
+    end
+
+    if parallel_trajectories && nthreads() > 1
+        Threads.@threads for itr in 1:ensemble_trajectories
+            run_one!(itr)
+        end
+    else
+        for itr in 1:ensemble_trajectories
+            run_one!(itr)
+        end
+    end
+
+    for itr in 1:ensemble_trajectories
+        isempty(errors[itr]) || error("Reduced ensemble trajectory $(itr) failed: $(errors[itr])")
+    end
+
+    out = Array{Float32}(undef, nsamples, K)
+    pos = 1
+    for part in parts
+        nrows = size(part, 1)
+        @views out[pos:(pos + nrows - 1), :] .= part
+        pos += nrows
+    end
+    return out
 end
 
 function save_x_dataset(path::AbstractString,
@@ -897,32 +1314,28 @@ function compute_observables_x(x::Vector{Float64},
     alpha0_ref::Float64,
     alpha1_ref::Float64,
     alpha2_ref::Float64,
-    alpha3_ref::Float64)
+    alpha3_ref::Float64,
+    m::Int=3)
     K = length(x)
+    m >= 0 || error("Observable lag parameter m must be >= 0")
+    m <= K - 1 || error("Observable lag parameter m=$(m) exceeds K-1=$(K-1)")
+
+    n_obs = m + 2
     invK = 1.0 / K
-    s1 = 0.0
-    s2 = 0.0
-    s3 = 0.0
-    s4 = 0.0
-    s5 = 0.0
+    obs = zeros(Float64, n_obs)
+
     @inbounds for k in 1:K
-        km2 = mod1idx(k - 2, K)
-        km1 = mod1idx(k - 1, K)
-        km3 = mod1idx(k - 3, K)
-
         xk = x[k]
-        xkm1 = x[km1]
-        xkm2 = x[km2]
-        xkm3 = x[km3]
-
-        x2 = xk * xk
-        s1 += xk
-        s2 += x2
-        s3 += xk * xkm1
-        s4 += xk * xkm2
-        s5 += xk * xkm3
+        obs[1] += xk
+        obs[2] += xk * xk
+        for lag in 1:m
+            kp = mod1idx(k + lag, K)
+            obs[lag + 2] += xk * x[kp]
+        end
     end
-    return [s1 * invK, s2 * invK, s3 * invK, s4 * invK, s5 * invK]
+
+    obs .*= invK
+    return obs
 end
 
 function compute_observables_series(xseries::Array{Float64,2},
@@ -930,13 +1343,18 @@ function compute_observables_series(xseries::Array{Float64,2},
     alpha0_ref::Float64,
     alpha1_ref::Float64,
     alpha2_ref::Float64,
-    alpha3_ref::Float64)
+    alpha3_ref::Float64,
+    m::Int=3)
     K, N = size(xseries)
-    out = Array{Float64}(undef, 5, N)
+    m >= 0 || error("Observable lag parameter m must be >= 0")
+    m <= K - 1 || error("Observable lag parameter m=$(m) exceeds K-1=$(K-1)")
+
+    n_obs = m + 2
+    out = Array{Float64}(undef, n_obs, N)
     x = zeros(Float64, K)
     for n in 1:N
         @inbounds x .= view(xseries, :, n)
-        out[:, n] .= compute_observables_x(x, F, alpha0_ref, alpha1_ref, alpha2_ref, alpha3_ref)
+        out[:, n] .= compute_observables_x(x, F, alpha0_ref, alpha1_ref, alpha2_ref, alpha3_ref, m)
     end
     return out
 end
@@ -967,11 +1385,67 @@ function xcorr_one_sided_unbiased_fft(x::AbstractVector{<:Real},
     return out
 end
 
+function _asymptotic_interval_indices(times::Vector{Float64}, t_start::Float64, t_end::Float64)
+    t_start >= 0.0 || error("t_start must be >= 0")
+    t_end > t_start || error("t_end must be > t_start")
+    tmin = times[1]
+    tmax = times[end]
+    ts = clamp(t_start, tmin, tmax)
+    te = clamp(t_end, tmin, tmax)
+    te >= ts || return [length(times)], ts, te
+    idx = findall(t -> t >= ts && t <= te, times)
+    isempty(idx) && (idx = [length(times)])
+    return idx, ts, te
+end
+
+function _tail_taper_weights(times::Vector{Float64},
+    t_start::Float64,
+    t_end::Float64,
+    taper::String)
+    mode = lowercase(strip(taper))
+    n = length(times)
+    w = zeros(Float64, n)
+
+    if mode == "none"
+        fill!(w, 1.0)
+        return w
+    elseif mode == "hard"
+        @inbounds for k in eachindex(times)
+            w[k] = times[k] >= t_start ? 1.0 : 0.0
+        end
+        return w
+    elseif mode == "linear"
+        span = t_end - t_start
+        if span <= eps(Float64)
+            w[end] = 1.0
+            return w
+        end
+        inv_span = 1.0 / span
+        @inbounds for k in eachindex(times)
+            tk = times[k]
+            if tk <= t_start
+                w[k] = 0.0
+            elseif tk >= t_end
+                w[k] = 1.0
+            else
+                w[k] = (tk - t_start) * inv_span
+            end
+        end
+        return w
+    end
+
+    error("tail_taper must be one of none|hard|linear (got '$taper')")
+end
+
 function build_gfdt_response(A::Matrix{Float64},
     G::Matrix{Float64},
     delta_t::Float64,
     n_lags::Int;
-    mean_center::Bool=true)
+    mean_center::Bool=true,
+    impulse_tail_debias::Bool=false,
+    t_start::Float64=0.0,
+    t_end::Float64=1.0,
+    tail_taper::String="linear")
     m, N = size(A)
     p, N2 = size(G)
     N == N2 || error("A/G time length mismatch")
@@ -980,6 +1454,14 @@ function build_gfdt_response(A::Matrix{Float64},
 
     Ause = mean_center ? (A .- mean(A; dims=2)) : A
     Guse = mean_center ? (G .- mean(G; dims=2)) : G
+
+    times = collect(0:n_lags) .* delta_t
+    tail_idx = Int[]
+    taper_weights = Float64[]
+    if impulse_tail_debias
+        tail_idx, ts, te = _asymptotic_interval_indices(times, t_start, t_end)
+        taper_weights = _tail_taper_weights(times, ts, te, tail_taper)
+    end
 
     C = zeros(Float64, m, p, n_lags + 1)
     R = zeros(Float64, m, p, n_lags + 1)
@@ -990,16 +1472,21 @@ function build_gfdt_response(A::Matrix{Float64},
         ai = vec(@view Ause[i, :])
         gj = vec(@view Guse[j, :])
         cpos = xcorr_one_sided_unbiased_fft(ai, gj, n_lags)
+        if impulse_tail_debias
+            c_bias = mean(@view cpos[tail_idx])
+            @inbounds for k in eachindex(cpos)
+                cpos[k] -= taper_weights[k] * c_bias
+            end
+        end
         @views C[i, j, :] .= cpos
         R[i, j, 1] = 0.0
         acc = 0.0
         @inbounds for lag in 1:n_lags
-            acc += cpos[lag]
+            acc += cpos[lag + 1]
             R[i, j, lag + 1] = delta_t * acc
         end
     end
 
-    times = collect(0:n_lags) .* delta_t
     return C, R, times
 end
 

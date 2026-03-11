@@ -1,0 +1,34 @@
+primary_method_requested = "unet"
+observable_residual_primary = 2.8530308145314955
+primary_method = "unet"
+convergence_metric_primary = 0.028819399919756527
+iteration = 3
+inactive_methods = []
+theta_primary = [0.4478505360723494, 1.592229309890397, -0.038504804612988476, -0.0021086936997274652, 2.700787149997489]
+
+[per_method.unet]
+gfdt_data_path = "/home/ludogio/Documents/JuliaProjects/ScoreUNet1D.jl/scripts/arnold/runs_calibration/run_023/method_unet/iter_003/data/gfdt_stochastic.hdf5"
+jacobian_cond_active_free = 63194.13880100904
+relative_step = 0.028819399919756527
+observable_residual = 2.8530308145314955
+theta_before = [0.4773538473152877, 1.515549109261337, -0.030954314997625992, -0.0018276845225406206, 2.739830144554152]
+checkpoint_path = "/home/ludogio/Documents/JuliaProjects/ScoreUNet1D.jl/scripts/arnold/runs_calibration/run_023/method_unet/iter_003/model/final_checkpoint.bson"
+theta_proposed = [0.4478505360723494, 1.592229309890397, -0.038504804612988476, -0.0021086936997274652, 2.700787149997489]
+delta_theta = [0.029503311242938243, -0.07668020062906013, 0.007550489615362481, 0.00028100917718684455, 0.03904299455666303]
+train_data_path = "/home/ludogio/Documents/JuliaProjects/ScoreUNet1D.jl/scripts/arnold/runs_calibration/run_023/method_unet/iter_003/data/train_stochastic.hdf5"
+
+    [per_method.unet.newton]
+    raw_cond = 1.4714881541192967e7
+    raw_rhs_norm = 162.5465493947492
+    weight_matrix_mode = "inverse_cov"
+    residual_before = 3.907302483999175
+    stability_accepted = true
+    line_search_accepted = true
+    free_parameters = [1, 2, 3, 4, 5]
+    line_search_scale = 0.2
+    applied_step = [0.029503311242938243, -0.07668020062906013, 0.007550489615362481, 0.00028100917718684455, 0.03904299455666303]
+    residual_after = 2.6697001037510613
+    line_search_used = true
+    stability_checked = true
+    active_observables = [1, 2, 3, 4, 5, 6]
+    correction_full = [0.1475165562146912, -0.3834010031453006, 0.037752448076812405, 0.0014050458859342226, 0.19521497278331515]

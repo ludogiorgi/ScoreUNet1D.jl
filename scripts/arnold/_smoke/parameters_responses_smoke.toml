@@ -17,8 +17,8 @@ spinup_steps = 2000
 save_every = 2
 nsamples = 9000
 rng_seed = 99
-process_noise_sigma = 0.0
-stochastic_x_noise = false
+process_noise_sigma_y = 0.0
+process_noise_sigma_x = 0.0
 
 [closure]
 F = 20.0
@@ -29,6 +29,9 @@ alpha3 = 0.0
 sigma = 1.0
 beta_tail = -2.0
 auto_fit = true
+
+[observables]
+m = 4
 
 [methods]
 gaussian = true
@@ -41,10 +44,15 @@ response_kind = "heaviside"
 nsamples = 2500
 start_index = 1000
 mean_center = true
+impulse_tail_debias = true
+impulse_tail_taper = "hard"
 batch_size = 256
 score_device = "CPU"
 score_forward_mode = "test"
 response_tmax = 1.0
+# Asymptotic interval [t_start, t_end] used for impulse debias + Jacobian averaging.
+t_start = 0.6
+t_end = 1.0
 output_points = 101
 divergence_mode = "hutchinson"
 divergence_eps = 0.03

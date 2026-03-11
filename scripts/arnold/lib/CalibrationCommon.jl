@@ -31,32 +31,45 @@ export load_calibration_config,
        compute_target_observables,
        generate_iteration_datasets,
        train_iteration_score,
+       apply_run_runtime_overrides!,
        compute_iteration_jacobians,
        perform_newton_update,
        check_convergence,
        save_iteration_outputs,
        save_convergence_figure,
        estimate_observables,
-    estimate_observables_for_convergence,
+       estimate_observables_for_acceptance,
+       estimate_observables_for_convergence,
+       weighted_observable_residual,
        CalibrationState
 
-const OBS_NAMES = [
-    "phi1_mean_x",
-    "phi2_mean_x2",
-    "phi3_mean_x_xm1",
-    "phi4_mean_x_xm2",
-    "phi5_mean_x_xm3",
-]
-
-const OBS_LABELS = [
-    "phi1=<X_k>",
-    "phi2=<X_k^2>",
-    "phi3=<X_k X_{k-1}>",
-    "phi4=<X_k X_{k-2}>",
-    "phi5=<X_k X_{k-3}>",
-]
-
 const PARAM_NAMES = ["alpha0", "alpha1", "alpha2", "alpha3", "sigma"]
+const RUN_OFFSET_SEED_KEYS = (
+    "datasets.train_rng_seed_base",
+    "training.seed",
+    "figures.langevin_seed_base",
+)
+
+function observable_names(m::Int)
+    m >= 0 || error("Observable lag parameter m must be >= 0")
+    out = String["phi1_mean_x", "phi2_mean_x2"]
+    for lag in 1:m
+        push!(out, "phi$(lag + 2)_mean_x_xp$(lag)")
+    end
+    return out
+end
+
+function observable_labels(m::Int)
+    m >= 0 || error("Observable lag parameter m must be >= 0")
+    out = String["phi1=<X_k>", "phi2=<X_k^2>"]
+    for lag in 1:m
+        push!(out, "phi$(lag + 2)=<X_k X_{k+$(lag)}>")
+    end
+    return out
+end
+
+observable_count(m::Int) = m + 2
+observable_count(cfg::Dict{String,Any}) = Int(get(cfg, "observables.n", observable_count(Int(get(cfg, "observables.m", 3)))))
 
 Base.@kwdef mutable struct CalibrationState
     iteration::Int = 0
@@ -75,6 +88,11 @@ as_str(tbl::Dict{String,Any}, key::String, default) = String(get(tbl, key, defau
 as_bool(tbl::Dict{String,Any}, key::String, default) = ArnoldCommon.parse_bool(get(tbl, key, default))
 as_int_vec(tbl::Dict{String,Any}, key::String, default) = Int.(collect(get(tbl, key, default)))
 as_float_vec(tbl::Dict{String,Any}, key::String, default) = Float64.(collect(get(tbl, key, default)))
+
+function _device_override(env_key::AbstractString, default::AbstractString)
+    value = strip(get(ENV, String(env_key), ""))
+    return isempty(value) ? String(default) : value
+end
 
 function require_table(doc::Dict{String,Any}, key::String)
     haskey(doc, key) || error("Missing [$key] table")
@@ -96,6 +114,33 @@ function maybe_subtable(tbl::Dict{String,Any}, key::String)
     end
     tbl[key] isa Dict{String,Any} || error("[$key] must be TOML table")
     return Dict{String,Any}(tbl[key])
+end
+
+function apply_run_runtime_overrides!(cfg::Dict{String,Any}, run_id::Int, run_name::AbstractString)
+    Bool(get(cfg, "runtime.run_seed_offset_applied", false)) && return cfg
+
+    cfg["runtime.run_id"] = Int(run_id)
+    cfg["runtime.run_name"] = String(run_name)
+
+    seed_stride = Int(get(cfg, "run.seed_stride", 1_000_000_000))
+    manual_seed_offset = Int(get(cfg, "run.seed_offset", 0))
+    run_seed_offset = manual_seed_offset + max(run_id - 1, 0) * seed_stride
+    cfg["runtime.run_seed_offset"] = run_seed_offset
+
+    if run_seed_offset != 0
+        for key in RUN_OFFSET_SEED_KEYS
+            cfg[key] = Int(cfg[key]) + run_seed_offset
+        end
+        cfg["numerical.seed_base"] = cfg["responses.finite_difference.seed_base"]
+    end
+
+    shared_gpu = strip(get(ENV, "ARNOLD_GPU_DEVICE", ""))
+    cfg["training.device"] = _device_override("ARNOLD_TRAIN_DEVICE", isempty(shared_gpu) ? cfg["training.device"] : shared_gpu)
+    cfg["responses.score_device"] = _device_override("ARNOLD_SCORE_DEVICE", isempty(shared_gpu) ? cfg["responses.score_device"] : shared_gpu)
+    cfg["figures.langevin_device"] = _device_override("ARNOLD_LANGEVIN_DEVICE", isempty(shared_gpu) ? cfg["figures.langevin_device"] : shared_gpu)
+    cfg["runtime.run_seed_offset_applied"] = true
+
+    return cfg
 end
 
 function require_main_symbol(sym::Symbol)
@@ -352,6 +397,7 @@ function load_calibration_config(path::String)
     doc = TOML.parsefile(path)
 
     paths = require_table(doc, "paths")
+    run = maybe_table(doc, "run")
     truth = require_table(doc, "truth")
     initial_theta = require_table(doc, "initial_theta")
     calibration = require_table(doc, "calibration")
@@ -360,9 +406,14 @@ function load_calibration_config(path::String)
     training = require_table(doc, "training")
     responses = require_table(doc, "responses")
     responses_fd = maybe_subtable(responses, "finite_difference")
+    observables = maybe_table(doc, "observables")
+    acceptance_ensemble = maybe_table(doc, "acceptance_ensemble")
     observables_ensemble = maybe_table(doc, "observables_ensemble")
     figures = maybe_table(doc, "figures")
     performance = maybe_table(doc, "performance")
+    numerical = maybe_table(doc, "numerical")
+    twoscale = maybe_table(doc, "twoscale")
+    closure = maybe_table(doc, "closure")
 
     data_params_path = abspath(as_str(paths, "data_params", "scripts/arnold/parameters_data.toml"))
     train_params_path = abspath(as_str(paths, "train_params", "scripts/arnold/parameters_train.toml"))
@@ -372,9 +423,69 @@ function load_calibration_config(path::String)
     train_doc = TOML.parsefile(train_params_path)
     responses_doc = TOML.parsefile(responses_params_path)
 
+    twoscale_K = as_int(twoscale, "K", data_cfg["twoscale.K"])
+    twoscale_J = as_int(twoscale, "J", data_cfg["twoscale.J"])
+    twoscale_F = as_float(twoscale, "F", data_cfg["twoscale.F"])
+    twoscale_h = as_float(twoscale, "h", data_cfg["twoscale.h"])
+    twoscale_c = as_float(twoscale, "c", data_cfg["twoscale.c"])
+    twoscale_b = as_float(twoscale, "b", data_cfg["twoscale.b"])
+    twoscale_dt = as_float(twoscale, "dt", data_cfg["twoscale.dt"])
+    twoscale_process_noise_sigma_y = as_float(twoscale, "process_noise_sigma_y", as_float(twoscale, "process_noise_sigma", data_cfg["twoscale.process_noise_sigma_y"]))
+    twoscale_process_noise_sigma_x = as_float(twoscale, "process_noise_sigma_x", as_bool(twoscale, "stochastic_x_noise", data_cfg["twoscale.stochastic_x_noise"]) ? as_float(twoscale, "process_noise_sigma", data_cfg["twoscale.process_noise_sigma"]) : data_cfg["twoscale.process_noise_sigma_x"])
+
+    closure_F = as_float(closure, "F", data_cfg["closure.F"])
+    closure_alpha0_initial = as_float(closure, "alpha0_initial", as_float(closure, "alpha0", data_cfg["closure.alpha0_initial"]))
+    closure_alpha1_initial = as_float(closure, "alpha1_initial", as_float(closure, "alpha1", data_cfg["closure.alpha1_initial"]))
+    closure_alpha2_initial = as_float(closure, "alpha2_initial", as_float(closure, "alpha2", data_cfg["closure.alpha2_initial"]))
+    closure_alpha3_initial = as_float(closure, "alpha3_initial", as_float(closure, "alpha3", data_cfg["closure.alpha3_initial"]))
+    closure_sigma_initial = as_float(closure, "sigma_initial", as_float(closure, "sigma", data_cfg["closure.sigma_initial"]))
+    closure_auto_fit = as_bool(closure, "auto_fit", data_cfg["closure.auto_fit"])
+    closure_fit_dataset_role = as_str(closure, "fit_dataset_role", data_cfg["closure.fit_dataset_role"])
+    closure_fit_start_index = as_int(closure, "fit_start_index", data_cfg["closure.fit_start_index"])
+    closure_fit_samples = as_int(closure, "fit_samples", data_cfg["closure.fit_samples"])
+    closure_fit_min_samples = as_int(closure, "fit_min_samples", data_cfg["closure.fit_min_samples"])
+
+    closure_fit_meta = Dict{String,Any}()
+    if closure_auto_fit
+        fit_data_cfg = copy(data_cfg)
+        fit_data_cfg["twoscale.K"] = twoscale_K
+        fit_data_cfg["twoscale.J"] = twoscale_J
+        fit_data_cfg["twoscale.F"] = twoscale_F
+        fit_data_cfg["twoscale.h"] = twoscale_h
+        fit_data_cfg["twoscale.c"] = twoscale_c
+        fit_data_cfg["twoscale.b"] = twoscale_b
+        fit_data_cfg["twoscale.dt"] = twoscale_dt
+        fit_data_cfg["twoscale.process_noise_sigma"] = twoscale_process_noise_sigma_y
+        fit_data_cfg["twoscale.process_noise_sigma_y"] = twoscale_process_noise_sigma_y
+        fit_data_cfg["twoscale.process_noise_sigma_x"] = twoscale_process_noise_sigma_x
+        fit_data_cfg["twoscale.stochastic_x_noise"] = twoscale_process_noise_sigma_x > 0.0
+        fit_data_cfg["closure.F"] = closure_F
+        fit_data_cfg["closure.alpha0_initial"] = closure_alpha0_initial
+        fit_data_cfg["closure.alpha1_initial"] = closure_alpha1_initial
+        fit_data_cfg["closure.alpha2_initial"] = closure_alpha2_initial
+        fit_data_cfg["closure.alpha3_initial"] = closure_alpha3_initial
+        fit_data_cfg["closure.sigma_initial"] = closure_sigma_initial
+        fit_data_cfg["closure.auto_fit"] = true
+        fit_data_cfg["closure.fit_dataset_role"] = closure_fit_dataset_role
+        fit_data_cfg["closure.fit_start_index"] = closure_fit_start_index
+        fit_data_cfg["closure.fit_samples"] = closure_fit_samples
+        fit_data_cfg["closure.fit_min_samples"] = closure_fit_min_samples
+
+        theta_fit, closure_fit_meta = ArnoldCommon.resolve_closure_theta(fit_data_cfg)
+        closure_alpha0_initial, closure_alpha1_initial, closure_alpha2_initial, closure_alpha3_initial, closure_sigma_initial = theta_fit
+    end
+
     train_tbl = maybe_table(train_doc, "train")
     responses_gfdt_tbl = maybe_table(responses_doc, "gfdt")
+    responses_observables_tbl = maybe_table(responses_doc, "observables")
     responses_numerical_tbl = maybe_table(responses_doc, "numerical")
+    responses_tail_window = as_float(responses, "tail_window", as_float(responses_gfdt_tbl, "tail_window", 1.0))
+    responses_tmax = as_float(responses, "response_tmax", as_float(responses_gfdt_tbl, "response_tmax", 2.0))
+    responses_t_end = as_float(responses, "t_end", as_float(responses_gfdt_tbl, "t_end", responses_tmax))
+    responses_t_start = as_float(responses, "t_start", as_float(responses_gfdt_tbl, "t_start", max(0.0, responses_t_end - responses_tail_window)))
+    obs_m = as_int(observables, "m", as_int(responses_observables_tbl, "m", as_int(responses_gfdt_tbl, "m", 3)))
+    obs_m >= 0 || error("observables.m must be >= 0")
+    obs_m <= twoscale_K - 1 || error("observables.m must be <= K-1")
 
     cfg = Dict{String,Any}(
         "paths.params_file" => abspath(path),
@@ -382,28 +493,42 @@ function load_calibration_config(path::String)
         "paths.train_params" => train_params_path,
         "paths.responses_params" => responses_params_path,
         "paths.runs_root" => abspath(as_str(paths, "runs_root", "scripts/arnold/runs_calibration")),
+        "run.run_id_padding" => as_int(run, "run_id_padding", 3),
+        "run.seed_stride" => as_int(run, "seed_stride", 1_000_000_000),
+        "run.seed_offset" => as_int(run, "seed_offset", 0),
 
-        "integration.K" => data_cfg["twoscale.K"],
-        "integration.J" => data_cfg["twoscale.J"],
-        "integration.F" => data_cfg["twoscale.F"],
-        "integration.h" => data_cfg["twoscale.h"],
-        "integration.c" => data_cfg["twoscale.c"],
-        "integration.b" => data_cfg["twoscale.b"],
-        "integration.dt" => data_cfg["twoscale.dt"],
+        "integration.K" => twoscale_K,
+        "integration.J" => twoscale_J,
+        "integration.F" => twoscale_F,
+        "integration.h" => twoscale_h,
+        "integration.c" => twoscale_c,
+        "integration.b" => twoscale_b,
+        "integration.dt" => twoscale_dt,
+        "integration.process_noise_sigma" => twoscale_process_noise_sigma_y,
+        "integration.process_noise_sigma_y" => twoscale_process_noise_sigma_y,
+        "integration.process_noise_sigma_x" => twoscale_process_noise_sigma_x,
+        "integration.stochastic_x_noise" => twoscale_process_noise_sigma_x > 0.0,
 
-        "closure.F" => data_cfg["closure.F"],
-        "closure.alpha0_initial" => data_cfg["closure.alpha0_initial"],
-        "closure.alpha1_initial" => data_cfg["closure.alpha1_initial"],
-        "closure.alpha2_initial" => data_cfg["closure.alpha2_initial"],
-        "closure.alpha3_initial" => data_cfg["closure.alpha3_initial"],
-        "closure.sigma_initial" => data_cfg["closure.sigma_initial"],
-        "closure.auto_fit" => data_cfg["closure.auto_fit"],
+        "closure.F" => closure_F,
+        "closure.alpha0_initial" => closure_alpha0_initial,
+        "closure.alpha1_initial" => closure_alpha1_initial,
+        "closure.alpha2_initial" => closure_alpha2_initial,
+        "closure.alpha3_initial" => closure_alpha3_initial,
+        "closure.sigma_initial" => closure_sigma_initial,
+        "closure.auto_fit" => closure_auto_fit,
+        "closure.fit_dataset_role" => closure_fit_dataset_role,
+        "closure.fit_start_index" => closure_fit_start_index,
+        "closure.fit_samples" => closure_fit_samples,
+        "closure.fit_min_samples" => closure_fit_min_samples,
+        "closure.fit_meta" => closure_fit_meta,
 
-        "observables.F_ref" => data_cfg["closure.F"],
-        "observables.alpha0_ref" => data_cfg["closure.alpha0_initial"],
-        "observables.alpha1_ref" => data_cfg["closure.alpha1_initial"],
-        "observables.alpha2_ref" => data_cfg["closure.alpha2_initial"],
-        "observables.alpha3_ref" => data_cfg["closure.alpha3_initial"],
+        "observables.F_ref" => closure_F,
+        "observables.alpha0_ref" => closure_alpha0_initial,
+        "observables.alpha1_ref" => closure_alpha1_initial,
+        "observables.alpha2_ref" => closure_alpha2_initial,
+        "observables.alpha3_ref" => closure_alpha3_initial,
+        "observables.m" => obs_m,
+        "observables.n" => observable_count(obs_m),
 
         "truth.source" => lowercase(as_str(truth, "source", "two_scale")),
         "truth.nsamples" => as_int(truth, "nsamples", 200_000),
@@ -413,11 +538,11 @@ function load_calibration_config(path::String)
         "truth.truth_file" => as_str(truth, "truth_file", ""),
         "truth.truth_key" => as_str(truth, "truth_key", ""),
 
-        "initial_theta.alpha0" => as_float(initial_theta, "alpha0", data_cfg["closure.alpha0_initial"]),
-        "initial_theta.alpha1" => as_float(initial_theta, "alpha1", data_cfg["closure.alpha1_initial"]),
-        "initial_theta.alpha2" => as_float(initial_theta, "alpha2", data_cfg["closure.alpha2_initial"]),
-        "initial_theta.alpha3" => as_float(initial_theta, "alpha3", data_cfg["closure.alpha3_initial"]),
-        "initial_theta.sigma" => as_float(initial_theta, "sigma", data_cfg["closure.sigma_initial"]),
+        "initial_theta.alpha0" => closure_auto_fit ? closure_alpha0_initial : as_float(initial_theta, "alpha0", closure_alpha0_initial),
+        "initial_theta.alpha1" => closure_auto_fit ? closure_alpha1_initial : as_float(initial_theta, "alpha1", closure_alpha1_initial),
+        "initial_theta.alpha2" => closure_auto_fit ? closure_alpha2_initial : as_float(initial_theta, "alpha2", closure_alpha2_initial),
+        "initial_theta.alpha3" => closure_auto_fit ? closure_alpha3_initial : as_float(initial_theta, "alpha3", closure_alpha3_initial),
+        "initial_theta.sigma" => closure_auto_fit ? closure_sigma_initial : as_float(initial_theta, "sigma", closure_sigma_initial),
         "initial_theta.perturbation_fraction" => as_float(initial_theta, "perturbation_fraction", 0.0),
 
         "calibration.max_iterations" => as_int(calibration, "max_iterations", 10),
@@ -427,7 +552,19 @@ function load_calibration_config(path::String)
         "calibration.line_search" => as_bool(calibration, "line_search", true),
         "calibration.line_search_max" => as_int(calibration, "line_search_max", 5),
         "calibration.regularization_gamma" => as_float(calibration, "regularization_gamma", 1e-4),
+        "calibration.lm_max_attempts" => as_int(calibration, "lm_max_attempts", 4),
+        "calibration.lm_growth_factor" => as_float(calibration, "lm_growth_factor", 10.0),
+        "calibration.min_actual_to_predicted_ratio" => as_float(calibration, "min_actual_to_predicted_ratio", 0.1),
+        "calibration.max_relative_step" => as_float(calibration, "max_relative_step", 0.0),
+        "calibration.conditioning_step_threshold" => as_float(calibration, "conditioning_step_threshold", 1e4),
+        "calibration.conditioned_max_relative_step" => as_float(calibration, "conditioned_max_relative_step", 0.05),
+        "calibration.postcheck_rel_tol" => as_float(calibration, "postcheck_rel_tol", 0.05),
+        "calibration.postcheck_abs_tol" => as_float(calibration, "postcheck_abs_tol", 1e-3),
+        "calibration.convergence_scope" => lowercase(as_str(calibration, "convergence_scope", "primary")),
         "calibration.weight_matrix" => lowercase(as_str(calibration, "weight_matrix", "identity")),
+        "calibration.apply_sigma_jacobian_mask" => as_bool(calibration, "apply_sigma_jacobian_mask", true),
+        "calibration.freeze_parameters" => as_int_vec(calibration, "freeze_parameters", Int[]),
+        "calibration.freeze_steps" => as_int(calibration, "freeze_steps", 0),
 
         "methods.unet" => as_bool(methods, "unet", true),
         "methods.gaussian" => as_bool(methods, "gaussian", true),
@@ -466,8 +603,12 @@ function load_calibration_config(path::String)
         "training.loss_mean_weight" => Float32(as_float(train_tbl, "loss_mean_weight", 0.0)),
         "training.loss_cov_weight" => Float32(as_float(train_tbl, "loss_cov_weight", 0.0)),
 
-        "responses.response_tmax" => as_float(responses, "response_tmax", as_float(responses_gfdt_tbl, "response_tmax", 2.0)),
+        "responses.response_tmax" => responses_tmax,
         "responses.mean_center" => as_bool(responses, "mean_center", true),
+        "responses.impulse_tail_debias" => as_bool(responses, "impulse_tail_debias", as_bool(responses_gfdt_tbl, "impulse_tail_debias", false)),
+        "responses.impulse_tail_taper" => lowercase(as_str(responses, "impulse_tail_taper", as_str(responses_gfdt_tbl, "impulse_tail_taper", "linear"))),
+        "responses.t_start" => responses_t_start,
+        "responses.t_end" => responses_t_end,
         "responses.apply_score_correction" => as_bool(responses, "apply_score_correction", true),
         "responses.divergence_mode" => lowercase(as_str(responses, "divergence_mode", as_str(responses_gfdt_tbl, "divergence_mode", "hutchinson"))),
         "responses.divergence_eps" => as_float(responses, "divergence_eps", as_float(responses_gfdt_tbl, "divergence_eps", 0.03)),
@@ -475,7 +616,6 @@ function load_calibration_config(path::String)
         "responses.score_device" => as_str(responses, "score_device", as_str(responses_gfdt_tbl, "score_device", "CPU")),
         "responses.score_forward_mode" => lowercase(as_str(responses_gfdt_tbl, "score_forward_mode", "test")),
         "responses.batch_size" => as_int(responses, "batch_size", as_int(responses_gfdt_tbl, "batch_size", 1024)),
-        "responses.tail_window" => as_float(responses, "tail_window", 1.0),
 
         "responses.finite_difference.nsamples" => as_int(responses_fd, "nsamples", 15_000_000),
         "responses.finite_difference.spinup" => as_int(responses_fd, "spinup", 2_000),
@@ -488,6 +628,20 @@ function load_calibration_config(path::String)
         "responses.finite_difference.save_every" => as_int(responses_fd, "save_every", as_int(datasets, "gfdt_save_every", data_cfg["datasets.gfdt_stochastic.save_every"])),
         "responses.finite_difference.parallel_trajectories" => as_bool(responses_fd, "parallel_trajectories", true),
 
+        "acceptance.trajectories" => as_int(acceptance_ensemble, "trajectories", 4),
+        "acceptance.samples_per_trajectory" => as_int(acceptance_ensemble, "samples_per_trajectory", 4_000),
+        "acceptance.save_every" => as_int(acceptance_ensemble, "save_every", as_int(datasets, "gfdt_save_every", data_cfg["datasets.gfdt_stochastic.save_every"])),
+        "acceptance.spinup_steps" => as_int(acceptance_ensemble, "spinup_steps", max(500, data_cfg["datasets.train_stochastic.spinup_steps"])),
+        "acceptance.seed_base" => as_int(acceptance_ensemble, "seed_base", 80_000_000),
+        "acceptance.parallel_trajectories" => as_bool(acceptance_ensemble, "parallel_trajectories", false),
+        "acceptance.refine_residual_threshold" => as_float(acceptance_ensemble, "refine_residual_threshold", 1.5),
+        "acceptance.refine_conditioning_threshold" => as_float(acceptance_ensemble, "refine_conditioning_threshold", as_float(calibration, "conditioning_step_threshold", 1e4)),
+        "acceptance.refined_trajectories" => as_int(acceptance_ensemble, "refined_trajectories", 12),
+        "acceptance.refined_samples_per_trajectory" => as_int(acceptance_ensemble, "refined_samples_per_trajectory", 10_000),
+        "acceptance.refined_save_every" => as_int(acceptance_ensemble, "refined_save_every", as_int(acceptance_ensemble, "save_every", as_int(datasets, "gfdt_save_every", data_cfg["datasets.gfdt_stochastic.save_every"]))),
+        "acceptance.refined_spinup_steps" => as_int(acceptance_ensemble, "refined_spinup_steps", as_int(acceptance_ensemble, "spinup_steps", max(500, data_cfg["datasets.train_stochastic.spinup_steps"]))),
+        "acceptance.refined_parallel_trajectories" => as_bool(acceptance_ensemble, "refined_parallel_trajectories", as_bool(acceptance_ensemble, "parallel_trajectories", false)),
+
         "observables_ensemble.trajectories" => as_int(observables_ensemble, "trajectories", 24),
         "observables_ensemble.samples_per_trajectory" => as_int(observables_ensemble, "samples_per_trajectory", 4_000),
         "observables_ensemble.save_every" => as_int(observables_ensemble, "save_every", as_int(datasets, "gfdt_save_every", data_cfg["datasets.gfdt_stochastic.save_every"])),
@@ -496,6 +650,9 @@ function load_calibration_config(path::String)
         "observables_ensemble.parallel_trajectories" => as_bool(observables_ensemble, "parallel_trajectories", true),
 
         "numerical.max_abs_state" => max(as_float(responses_numerical_tbl, "max_abs_state", 80.0), 1e4),
+        "numerical.state_min" => as_float(numerical, "state_min", -200.0),
+        "numerical.state_max" => as_float(numerical, "state_max", 200.0),
+        "numerical.max_boundary_hits" => as_int(numerical, "max_boundary_hits", 40),
         "numerical.min_valid_fraction" => as_float(responses_numerical_tbl, "min_valid_fraction", 0.8),
         "numerical.max_h_shrinks" => as_int(responses_numerical_tbl, "max_h_shrinks", 6),
         "numerical.thread_chunk_size" => as_int(responses_numerical_tbl, "thread_chunk_size", 256),
@@ -504,8 +661,23 @@ function load_calibration_config(path::String)
         "figures.dpi" => as_int(figures, "dpi", 180),
         "figures.save_per_iteration" => as_bool(figures, "save_per_iteration", true),
         "figures.save_convergence" => as_bool(figures, "save_convergence", true),
+        "figures.save_langevin_stats" => as_bool(figures, "save_langevin_stats", true),
+        "figures.langevin_device" => as_str(figures, "langevin_device", as_str(responses, "score_device", as_str(responses_gfdt_tbl, "score_device", "CPU"))),
+        "figures.langevin_dt" => as_float(figures, "langevin_dt", twoscale_dt),
+        "figures.langevin_resolution" => as_int(figures, "langevin_resolution", as_int(datasets, "train_save_every", data_cfg["datasets.train_stochastic.save_every"])),
+        "figures.langevin_nsteps" => as_int(figures, "langevin_nsteps", 12_000),
+        "figures.langevin_burn_in" => as_int(figures, "langevin_burn_in", 2_000),
+        "figures.langevin_ensembles" => as_int(figures, "langevin_ensembles", 128),
+        "figures.langevin_seed_base" => as_int(figures, "langevin_seed_base", 70_000_000),
+        "figures.langevin_use_boundary" => as_bool(figures, "langevin_use_boundary", true),
+        "figures.langevin_boundary_min" => as_float(figures, "langevin_boundary_min", as_float(numerical, "state_min", -200.0)),
+        "figures.langevin_boundary_max" => as_float(figures, "langevin_boundary_max", as_float(numerical, "state_max", 200.0)),
+        "figures.langevin_max_samples" => as_int(figures, "langevin_max_samples", 10_000),
+        "figures.langevin_pdf_bins" => as_int(figures, "langevin_pdf_bins", 80),
+        "figures.langevin_max_acf_lag" => as_int(figures, "langevin_max_acf_lag", 200),
 
         "performance.parallel_methods" => as_bool(performance, "parallel_methods", true),
+        "performance.max_parallel_methods" => as_int(performance, "max_parallel_methods", 2),
         "performance.parallel_fd_columns" => as_bool(performance, "parallel_fd_columns", true),
         "performance.parallel_line_search" => as_bool(performance, "parallel_line_search", true),
         "performance.max_parallel_line_search" => as_int(performance, "max_parallel_line_search", 3),
@@ -513,7 +685,13 @@ function load_calibration_config(path::String)
     )
 
     cfg["calibration.free_parameters"] = normalize_indices(as_int_vec(calibration, "free_parameters", Int[]), 5, "calibration.free_parameters")
-    cfg["calibration.active_observables"] = normalize_indices(as_int_vec(calibration, "active_observables", Int[]), 5, "calibration.active_observables")
+    cfg["calibration.active_observables"] = normalize_indices(as_int_vec(calibration, "active_observables", Int[]), cfg["observables.n"], "calibration.active_observables")
+    freeze_params_raw = collect(get(calibration, "freeze_parameters", Int[]))
+    cfg["calibration.freeze_parameters"] = isempty(freeze_params_raw) ? Int[] : normalize_indices(
+        Int.(freeze_params_raw),
+        5,
+        "calibration.freeze_parameters",
+    )
 
     cfg["integration.save_every"] = cfg["datasets.gfdt_save_every"]
     cfg["closure.alpha0"] = cfg["initial_theta.alpha0"]
@@ -541,7 +719,27 @@ function load_calibration_config(path::String)
     cfg["calibration.damping"] > 0 || error("calibration.damping must be > 0")
     cfg["calibration.line_search_max"] >= 0 || error("calibration.line_search_max must be >= 0")
     cfg["calibration.regularization_gamma"] >= 0 || error("calibration.regularization_gamma must be >= 0")
+    cfg["calibration.lm_max_attempts"] >= 1 || error("calibration.lm_max_attempts must be >= 1")
+    cfg["calibration.lm_growth_factor"] > 1 || error("calibration.lm_growth_factor must be > 1")
+    cfg["calibration.min_actual_to_predicted_ratio"] >= 0 || error("calibration.min_actual_to_predicted_ratio must be >= 0")
+    cfg["calibration.conditioning_step_threshold"] > 0 || error("calibration.conditioning_step_threshold must be > 0")
+    cfg["calibration.postcheck_rel_tol"] >= 0 || error("calibration.postcheck_rel_tol must be >= 0")
+    cfg["calibration.postcheck_abs_tol"] >= 0 || error("calibration.postcheck_abs_tol must be >= 0")
+    cfg["calibration.convergence_scope"] in ("primary", "all") || error("calibration.convergence_scope must be 'primary' or 'all'")
     cfg["calibration.weight_matrix"] in ("identity", "inverse_cov", "diagonal") || error("calibration.weight_matrix must be identity, inverse_cov, or diagonal")
+    cfg["calibration.freeze_steps"] >= 0 || error("calibration.freeze_steps must be >= 0")
+
+    freeze_params = cfg["calibration.freeze_parameters"]
+    free_params = cfg["calibration.free_parameters"]
+    active_obs = cfg["calibration.active_observables"]
+    all(p -> p in free_params, freeze_params) || error("calibration.freeze_parameters must be a subset of calibration.free_parameters")
+    if cfg["calibration.freeze_steps"] > 0
+        length(freeze_params) < length(active_obs) || error("calibration.freeze_parameters freezes too many parameters for the selected active observables; at least one active observable must remain after dropping one per frozen parameter")
+    end
+
+    cfg["integration.K"] >= 2 || error("twoscale.K must be >= 2")
+    cfg["integration.J"] >= 1 || error("twoscale.J must be >= 1")
+    cfg["integration.dt"] > 0 || error("twoscale.dt must be > 0")
 
     !isempty(enabled_methods(cfg)) || error("At least one Jacobian method must be enabled")
 
@@ -558,8 +756,11 @@ function load_calibration_config(path::String)
 
     cfg["responses.response_tmax"] > 0 || error("responses.response_tmax must be > 0")
     cfg["responses.divergence_mode"] in ("hutchinson", "fd_axis", "exact") || error("responses.divergence_mode must be one of hutchinson|fd_axis|exact")
+    cfg["responses.impulse_tail_taper"] in ("none", "hard", "linear") || error("responses.impulse_tail_taper must be one of none|hard|linear")
+    cfg["responses.t_start"] >= 0 || error("responses.t_start must be >= 0")
+    cfg["responses.t_end"] > cfg["responses.t_start"] || error("responses.t_end must be > responses.t_start")
+    cfg["responses.t_end"] <= cfg["responses.response_tmax"] + 1e-12 || error("responses.t_end must be <= responses.response_tmax")
     cfg["responses.batch_size"] >= 1 || error("responses.batch_size must be >= 1")
-    cfg["responses.tail_window"] >= 0 || error("responses.tail_window must be >= 0")
 
     length(cfg["responses.finite_difference.h_abs"]) == 5 || error("responses.finite_difference.h_abs must have length 5")
     cfg["responses.finite_difference.h_rel"] > 0 || error("responses.finite_difference.h_rel must be > 0")
@@ -567,18 +768,43 @@ function load_calibration_config(path::String)
     cfg["responses.finite_difference.samples_per_trajectory"] >= 1 || error("responses.finite_difference.samples_per_trajectory must be >= 1")
     cfg["responses.finite_difference.save_every"] >= 1 || error("responses.finite_difference.save_every must be >= 1")
 
+    cfg["acceptance.trajectories"] >= 1 || error("acceptance_ensemble.trajectories must be >= 1")
+    cfg["acceptance.samples_per_trajectory"] >= 1 || error("acceptance_ensemble.samples_per_trajectory must be >= 1")
+    cfg["acceptance.save_every"] >= 1 || error("acceptance_ensemble.save_every must be >= 1")
+    cfg["acceptance.spinup_steps"] >= 0 || error("acceptance_ensemble.spinup_steps must be >= 0")
+    cfg["acceptance.refine_residual_threshold"] >= 0 || error("acceptance_ensemble.refine_residual_threshold must be >= 0")
+    cfg["acceptance.refine_conditioning_threshold"] >= 0 || error("acceptance_ensemble.refine_conditioning_threshold must be >= 0")
+    cfg["acceptance.refined_trajectories"] >= 1 || error("acceptance_ensemble.refined_trajectories must be >= 1")
+    cfg["acceptance.refined_samples_per_trajectory"] >= 1 || error("acceptance_ensemble.refined_samples_per_trajectory must be >= 1")
+    cfg["acceptance.refined_save_every"] >= 1 || error("acceptance_ensemble.refined_save_every must be >= 1")
+    cfg["acceptance.refined_spinup_steps"] >= 0 || error("acceptance_ensemble.refined_spinup_steps must be >= 0")
+
     cfg["observables_ensemble.trajectories"] >= 1 || error("observables_ensemble.trajectories must be >= 1")
     cfg["observables_ensemble.samples_per_trajectory"] >= 1 || error("observables_ensemble.samples_per_trajectory must be >= 1")
     cfg["observables_ensemble.save_every"] >= 1 || error("observables_ensemble.save_every must be >= 1")
     cfg["observables_ensemble.spinup_steps"] >= 0 || error("observables_ensemble.spinup_steps must be >= 0")
 
     cfg["numerical.max_abs_state"] > 0 || error("numerical.max_abs_state must be > 0")
+    cfg["numerical.state_min"] <= cfg["numerical.state_max"] || error("numerical.state_min must be <= numerical.state_max")
+    cfg["numerical.max_boundary_hits"] >= 1 || error("numerical.max_boundary_hits must be >= 1")
     0.0 <= cfg["numerical.min_valid_fraction"] <= 1.0 || error("numerical.min_valid_fraction must be in [0,1]")
     cfg["numerical.max_h_shrinks"] >= 0 || error("numerical.max_h_shrinks must be >= 0")
     cfg["numerical.thread_chunk_size"] >= 1 || error("numerical.thread_chunk_size must be >= 1")
     0.0 < cfg["numerical.h_shrink_factor"] < 1.0 || error("numerical.h_shrink_factor must be in (0,1)")
 
+    cfg["performance.max_parallel_methods"] >= 1 || error("performance.max_parallel_methods must be >= 1")
     cfg["performance.max_parallel_line_search"] >= 1 || error("performance.max_parallel_line_search must be >= 1")
+    cfg["run.run_id_padding"] >= 1 || error("run.run_id_padding must be >= 1")
+    cfg["run.seed_stride"] >= 0 || error("run.seed_stride must be >= 0")
+
+    cfg["figures.langevin_dt"] > 0 || error("figures.langevin_dt must be > 0")
+    cfg["figures.langevin_resolution"] >= 1 || error("figures.langevin_resolution must be >= 1")
+    cfg["figures.langevin_nsteps"] > cfg["figures.langevin_burn_in"] || error("figures.langevin_nsteps must be > figures.langevin_burn_in")
+    cfg["figures.langevin_ensembles"] >= 1 || error("figures.langevin_ensembles must be >= 1")
+    cfg["figures.langevin_boundary_min"] <= cfg["figures.langevin_boundary_max"] || error("figures.langevin_boundary_min must be <= figures.langevin_boundary_max")
+    cfg["figures.langevin_max_samples"] >= 2 || error("figures.langevin_max_samples must be >= 2")
+    cfg["figures.langevin_pdf_bins"] >= 8 || error("figures.langevin_pdf_bins must be >= 8")
+    cfg["figures.langevin_max_acf_lag"] >= 1 || error("figures.langevin_max_acf_lag must be >= 1")
 
     cfg["runtime.A_target"] = nothing
     cfg["runtime.current_observable_series"] = nothing
@@ -587,10 +813,234 @@ function load_calibration_config(path::String)
     cfg["runtime.iteration_diagnostics"] = Dict{String,Any}()
     cfg["runtime.truth_matrix"] = nothing
     cfg["runtime.current_gfdt_path"] = ""
+    cfg["runtime.current_train_path"] = ""
+    cfg["runtime.current_checkpoint_path"] = ""
+    cfg["runtime.current_langevin_method"] = ""
     cfg["runtime.iteration"] = 0
     cfg["runtime.method_parallel_active"] = false
+    cfg["runtime.previous_observable_residual"] = Inf
+    cfg["runtime.previous_observable_residual_unweighted"] = Inf
+    cfg["runtime.run_id"] = 0
+    cfg["runtime.run_name"] = ""
+    cfg["runtime.run_seed_offset"] = 0
+    cfg["runtime.run_seed_offset_applied"] = false
 
     return cfg
+end
+
+function normalize_with_stats(tensor::Array{Float32,3}, stats::DataStats)
+    K, C, _ = size(tensor)
+    mean_lc = permutedims(stats.mean, (2, 1))
+    std_lc = permutedims(stats.std, (2, 1))
+    out = (tensor .- reshape(mean_lc, K, C, 1)) ./ reshape(std_lc, K, C, 1)
+    return Array{Float32,3}(out)
+end
+
+function denormalize_with_stats(tensor::Array{Float32,3}, stats::DataStats)
+    K, C, _ = size(tensor)
+    mean_lc = permutedims(stats.mean, (2, 1))
+    std_lc = permutedims(stats.std, (2, 1))
+    out = tensor .* reshape(std_lc, K, C, 1) .+ reshape(mean_lc, K, C, 1)
+    return Array{Float32,3}(out)
+end
+
+function resolve_langevin_device(name::AbstractString)
+    try
+        device = select_device(name)
+        activate_device!(device)
+        return device, String(name)
+    catch err
+        @warn "Requested Langevin diagnostic device unavailable; using CPU" requested = name error = sprint(showerror, err)
+        device = ScoreUNet1D.CPUDevice()
+        activate_device!(device)
+        return device, "CPU"
+    end
+end
+
+function langevin_result_to_tensor(result, K::Int, C::Int)
+    traj = result.trajectory
+    ndims(traj) in (2, 3, 4) || error("Unexpected Langevin trajectory rank: $(ndims(traj))")
+    size(traj, 1) == K || error("Langevin trajectory K mismatch")
+
+    if ndims(traj) == 2
+        size(traj, 2) >= 1 || error("Langevin trajectory has no time samples")
+        return reshape(traj, K, 1, size(traj, 2))
+    elseif ndims(traj) == 3
+        # Match run_langevin.jl convention: trajectory is typically K x T x E.
+        traj4 = reshape(traj, K, C, :, size(traj, 3))
+        return reshape(permutedims(traj4, (1, 2, 4, 3)), K, C, :)
+    end
+
+    # K x C x T x E
+    size(traj, 2) == C || error("Langevin trajectory channel mismatch")
+    traj_perm = permutedims(traj, (1, 2, 4, 3))
+    return reshape(traj_perm, K, C, :)
+end
+
+function save_score_langevin_iteration_figure(path::AbstractString,
+    cfg::Dict{String,Any},
+    train_data_path::AbstractString,
+    checkpoint_path::AbstractString,
+    iteration::Int;
+    archive_path::Union{Nothing,AbstractString}=nothing,
+    summary_path::Union{Nothing,AbstractString}=nothing)
+    isdefined(Main, :ArnoldStatsPlots) || return ""
+    sp = getproperty(Main, :ArnoldStatsPlots)
+
+    train_path_s = String(strip(String(train_data_path)))
+    ckpt_path_s = String(strip(String(checkpoint_path)))
+    isempty(train_path_s) && return ""
+    isempty(ckpt_path_s) && return ""
+    isfile(train_path_s) || error("Training dataset not found for Langevin diagnostic: $train_path_s")
+    isfile(ckpt_path_s) || error("Checkpoint not found for Langevin diagnostic: $ckpt_path_s")
+
+    payload = BSON.load(ckpt_path_s)
+    haskey(payload, :model) || error("Checkpoint missing :model at $ckpt_path_s")
+    haskey(payload, :trainer_cfg) || error("Checkpoint missing :trainer_cfg at $ckpt_path_s")
+    haskey(payload, :stats) || error("Checkpoint missing :stats at $ckpt_path_s")
+
+    model = payload[:model]
+    trainer_cfg = payload[:trainer_cfg]
+    stats = payload[:stats]
+
+    tensor_obs_raw = load_train_tensor(train_path_s, cfg["datasets.train_key"])
+    tensor_obs_norm = normalize_with_stats(tensor_obs_raw, stats)
+    dataset = NormalizedDataset(tensor_obs_norm, stats)
+
+    device, device_name = resolve_langevin_device(cfg["figures.langevin_device"])
+    model = move_model(model, is_gpu(device) ? device : ScoreUNet1D.CPUDevice())
+
+    sigma_train = Float32(getproperty(trainer_cfg, :sigma))
+    lg_cfg = LangevinConfig(
+        dt=cfg["figures.langevin_dt"],
+        sample_dt=cfg["figures.langevin_dt"] * cfg["figures.langevin_resolution"],
+        nsteps=cfg["figures.langevin_nsteps"],
+        burn_in=cfg["figures.langevin_burn_in"],
+        resolution=cfg["figures.langevin_resolution"],
+        n_ensembles=cfg["figures.langevin_ensembles"],
+        nbins=cfg["figures.langevin_pdf_bins"],
+        sigma=sigma_train,
+        seed=cfg["figures.langevin_seed_base"] + iteration,
+        mode=:all,
+        boundary=cfg["figures.langevin_use_boundary"] ? (cfg["figures.langevin_boundary_min"], cfg["figures.langevin_boundary_max"]) : nothing,
+        progress=false,
+    )
+
+    @info "Running score-Langevin diagnostics for calibration iteration" iteration device = device_name nsteps = cfg["figures.langevin_nsteps"] burn_in = cfg["figures.langevin_burn_in"] ensembles = cfg["figures.langevin_ensembles"] resolution = cfg["figures.langevin_resolution"]
+    result = run_langevin(model, dataset, lg_cfg; device=device)
+
+    K, C, _ = size(tensor_obs_raw)
+    tensor_gen_norm = langevin_result_to_tensor(result, K, C)
+    tensor_gen_raw = denormalize_with_stats(tensor_gen_norm, stats)
+    n_use = min(size(tensor_obs_raw, 3), size(tensor_gen_raw, 3), Int(cfg["figures.langevin_max_samples"]))
+    n_use >= 2 || error("Langevin diagnostic has too few samples: $n_use")
+
+    obs_eval = tensor_obs_raw[:, :, 1:n_use]
+    gen_eval = tensor_gen_raw[:, :, 1:n_use]
+    obs_eval_norm = tensor_obs_norm[:, :, 1:n_use]
+    gen_eval_norm = tensor_gen_norm[:, :, 1:n_use]
+    kl_mode, js_mode = sp.modewise_metrics(
+        obs_eval,
+        gen_eval;
+        nbins=cfg["figures.langevin_pdf_bins"],
+        low_q=0.001,
+        high_q=0.999,
+    )
+
+    fig_path = sp.save_stats_figure_acf(
+        path,
+        obs_eval,
+        gen_eval,
+        kl_mode,
+        js_mode,
+        cfg["figures.langevin_pdf_bins"];
+        max_lag=cfg["figures.langevin_max_acf_lag"],
+        obs_dt=Float64(cfg["datasets.train_save_every"]) * Float64(cfg["integration.dt"]),
+        gen_dt=Float64(lg_cfg.sample_dt),
+        obs_label="Train stochastic",
+        gen_label="Score Langevin",
+    )
+
+    avg_mode_kl = mean(kl_mode)
+    avg_mode_js = mean(js_mode)
+
+    if archive_path !== nothing
+        archive_path_s = abspath(String(archive_path))
+        mkpath(dirname(archive_path_s))
+        h5open(archive_path_s, "w") do h5
+            h5["observed/raw"] = obs_eval
+            h5["generated/raw"] = gen_eval
+            h5["observed/normalized"] = obs_eval_norm
+            h5["generated/normalized"] = gen_eval_norm
+            h5["metrics/kl_mode"] = kl_mode
+            h5["metrics/js_mode"] = js_mode
+            h5["stats/mean"] = Float32.(stats.mean)
+            h5["stats/std"] = Float32.(stats.std)
+            attrs = HDF5.attributes(h5)
+            attrs["iteration"] = iteration
+            attrs["n_use"] = n_use
+            attrs["device"] = device_name
+            attrs["train_data_path"] = train_path_s
+            attrs["checkpoint_path"] = ckpt_path_s
+        end
+    end
+
+    if summary_path !== nothing
+        summary_path_s = abspath(String(summary_path))
+        mkpath(dirname(summary_path_s))
+        doc = Dict{String,Any}(
+            "iteration" => iteration,
+            "device" => device_name,
+            "n_use" => n_use,
+            "avg_mode_kl" => avg_mode_kl,
+            "avg_mode_js" => avg_mode_js,
+            "train_data_path" => train_path_s,
+            "checkpoint_path" => ckpt_path_s,
+            "figure_path" => abspath(fig_path),
+            "archive_path" => archive_path === nothing ? "" : abspath(String(archive_path)),
+        )
+        open(summary_path_s, "w") do io
+            TOML.print(io, doc)
+        end
+    end
+
+    reclaim_device_memory!()
+    safe_cuda_reclaim()
+    return fig_path
+end
+
+function build_calibration_truth_data_cfg(cfg::Dict{String,Any})
+    data_cfg, _ = ArnoldCommon.load_data_config(cfg["paths.data_params"])
+    data_cfg["twoscale.K"] = Int(cfg["integration.K"])
+    data_cfg["twoscale.J"] = Int(cfg["integration.J"])
+    data_cfg["twoscale.F"] = Float64(cfg["integration.F"])
+    data_cfg["twoscale.h"] = Float64(cfg["integration.h"])
+    data_cfg["twoscale.c"] = Float64(cfg["integration.c"])
+    data_cfg["twoscale.b"] = Float64(cfg["integration.b"])
+    data_cfg["twoscale.dt"] = Float64(cfg["integration.dt"])
+    data_cfg["twoscale.process_noise_sigma"] = Float64(cfg["integration.process_noise_sigma_y"])
+    data_cfg["twoscale.process_noise_sigma_y"] = Float64(cfg["integration.process_noise_sigma_y"])
+    data_cfg["twoscale.process_noise_sigma_x"] = Float64(cfg["integration.process_noise_sigma_x"])
+    data_cfg["twoscale.stochastic_x_noise"] = Bool(cfg["integration.process_noise_sigma_x"] > 0)
+
+    data_cfg["closure.F"] = Float64(cfg["closure.F"])
+    data_cfg["closure.alpha0_initial"] = Float64(cfg["closure.alpha0_initial"])
+    data_cfg["closure.alpha1_initial"] = Float64(cfg["closure.alpha1_initial"])
+    data_cfg["closure.alpha2_initial"] = Float64(cfg["closure.alpha2_initial"])
+    data_cfg["closure.alpha3_initial"] = Float64(cfg["closure.alpha3_initial"])
+    data_cfg["closure.sigma_initial"] = Float64(cfg["closure.sigma_initial"])
+    data_cfg["closure.auto_fit"] = Bool(cfg["closure.auto_fit"])
+
+    data_cfg["datasets.two_scale_observed.spinup_steps"] = Int(cfg["truth.spinup_steps"])
+    data_cfg["datasets.two_scale_observed.save_every"] = Int(cfg["truth.save_every"])
+    data_cfg["datasets.two_scale_observed.nsamples"] = Int(cfg["truth.nsamples"])
+    data_cfg["datasets.two_scale_observed.rng_seed"] = Int(cfg["truth.rng_seed"])
+    data_cfg["datasets.two_scale_observed.target_spacing"] = ArnoldCommon.dataset_time_spacing(
+        data_cfg["twoscale.dt"],
+        data_cfg["datasets.two_scale_observed.save_every"],
+    )
+
+    return data_cfg
 end
 
 function maybe_save_truth_artifacts!(cfg::Dict{String,Any}, X::Matrix{Float64}, A_target::Vector{Float64})
@@ -602,7 +1052,7 @@ function maybe_save_truth_artifacts!(cfg::Dict{String,Any}, X::Matrix{Float64}, 
 
     mkpath(truth_dir)
     target_csv = joinpath(truth_dir, "target_observables.csv")
-    write_vector_csv(target_csv, OBS_NAMES, A_target)
+    write_vector_csv(target_csv, observable_names(Int(cfg["observables.m"])), A_target)
 
     traj_path = joinpath(truth_dir, "truth_trajectory.hdf5")
     attrs = Dict{String,Any}(
@@ -618,14 +1068,15 @@ end
 function compute_target_observables(cfg::Dict)
     obs_ref = obs_ref_tuple(cfg)
     K = cfg["integration.K"]
+    obs_m = Int(cfg["observables.m"])
 
     X = if cfg["truth.source"] == "two_scale"
         # Reuse cached Arnold dataset when signatures already match; this avoids
         # regenerating the expensive two-scale trajectory on every calibration run.
-        data_cfg, _ = ArnoldCommon.load_data_config(cfg["paths.data_params"])
-        ArnoldCommon.ensure_arnold_dataset_role!(data_cfg, "two_scale_observed")
+        truth_data_cfg = build_calibration_truth_data_cfg(cfg)
+        ArnoldCommon.ensure_arnold_dataset_role!(truth_data_cfg, "two_scale_observed")
         ArnoldCommon.load_role_x_matrix(
-            data_cfg,
+            truth_data_cfg,
             "two_scale_observed";
             nsamples=cfg["truth.nsamples"],
             start_index=1,
@@ -642,6 +1093,7 @@ function compute_target_observables(cfg::Dict)
         obs_ref.alpha1_ref,
         obs_ref.alpha2_ref,
         obs_ref.alpha3_ref,
+        obs_m,
     )
     A_target = vec(mean(A; dims=2))
     all(isfinite, A_target) || error("Target observables contain non-finite values")
@@ -653,7 +1105,8 @@ function compute_target_observables(cfg::Dict)
     return A_target
 end
 
-function generate_iteration_datasets(cfg::Dict, theta::NTuple{5,Float64}, iteration::Int, run_dir::String)
+function generate_iteration_datasets(cfg::Dict, theta::NTuple{5,Float64}, iteration::Int, run_dir::String;
+    generate_train::Bool=true)
     iter_data_dir = joinpath(run_dir, @sprintf("iter_%03d", iteration), "data")
     mkpath(iter_data_dir)
 
@@ -665,71 +1118,6 @@ function generate_iteration_datasets(cfg::Dict, theta::NTuple{5,Float64}, iterat
     train_total = Int(cfg["datasets.train_nsamples"])
     train_ntraj = Int(cfg["datasets.train_ensemble_trajectories"])
     train_parallel = Bool(cfg["datasets.train_parallel_trajectories"]) && train_ntraj > 1 && Base.Threads.nthreads() > 1
-
-    base = div(train_total, train_ntraj)
-    remn = mod(train_total, train_ntraj)
-    counts = [base + (i <= remn ? 1 : 0) for i in 1:train_ntraj]
-    train_chunks = Vector{Matrix{Float32}}(undef, train_ntraj)
-    train_errors = fill("", train_ntraj)
-
-    build_chunk! = function (i::Int)
-        ns = counts[i]
-        if ns <= 0
-            train_chunks[i] = zeros(Float32, 0, cfg["integration.K"])
-            train_errors[i] = ""
-            return nothing
-        end
-        try
-            chunk_seed = train_seed + 100_000 * i
-            train_chunks[i] = ArnoldCommon.generate_reduced_x_timeseries(
-                K=cfg["integration.K"],
-                F=cfg["closure.F"],
-                alpha0=a0,
-                alpha1=a1,
-                alpha2=a2,
-                alpha3=a3,
-                sigma=sig,
-                dt=cfg["integration.dt"],
-                spinup_steps=cfg["datasets.spinup_steps"],
-                save_every=cfg["datasets.train_save_every"],
-                nsamples=ns,
-                rng_seed=chunk_seed,
-                max_abs_state=1e4,
-                max_restarts=40,
-            )
-            train_errors[i] = ""
-        catch err
-            train_errors[i] = sprint(showerror, err)
-            train_chunks[i] = zeros(Float32, 0, cfg["integration.K"])
-        end
-        return nothing
-    end
-
-    if train_parallel
-        Base.Threads.@threads for i in 1:train_ntraj
-            build_chunk!(i)
-        end
-    else
-        for i in 1:train_ntraj
-            build_chunk!(i)
-        end
-    end
-
-    for i in 1:train_ntraj
-        isempty(train_errors[i]) || error("Training trajectory chunk $(i) failed: $(train_errors[i])")
-    end
-
-    train_data = Array{Float32}(undef, train_total, cfg["integration.K"])
-    pos = 1
-    for i in 1:train_ntraj
-        chunk = train_chunks[i]
-        nrows = size(chunk, 1)
-        if nrows > 0
-            @views train_data[pos:(pos + nrows - 1), :] .= chunk
-            pos += nrows
-        end
-    end
-    pos == train_total + 1 || error("Training dataset assembly mismatch: expected $(train_total) rows, got $(pos - 1)")
 
     gfdt_data = ArnoldCommon.generate_reduced_x_timeseries(
         K=cfg["integration.K"],
@@ -746,9 +1134,12 @@ function generate_iteration_datasets(cfg::Dict, theta::NTuple{5,Float64}, iterat
         rng_seed=gfdt_seed,
         max_abs_state=1e4,
         max_restarts=40,
+        state_min=cfg["numerical.state_min"],
+        state_max=cfg["numerical.state_max"],
+        max_boundary_hits=cfg["numerical.max_boundary_hits"],
     )
 
-    train_path = joinpath(iter_data_dir, "train_stochastic.hdf5")
+    train_path = ""
     gfdt_path = joinpath(iter_data_dir, "gfdt_stochastic.hdf5")
 
     common_attrs = Dict{String,Any}(
@@ -763,15 +1154,6 @@ function generate_iteration_datasets(cfg::Dict, theta::NTuple{5,Float64}, iterat
         "sigma" => sig,
     )
 
-    attrs_train = copy(common_attrs)
-    attrs_train["save_every"] = cfg["datasets.train_save_every"]
-    attrs_train["nsamples"] = cfg["datasets.train_nsamples"]
-    attrs_train["spinup_steps"] = cfg["datasets.spinup_steps"]
-    attrs_train["rng_seed"] = train_seed
-    attrs_train["ensemble_trajectories"] = train_ntraj
-    attrs_train["parallel_trajectories"] = train_parallel
-    attrs_train["role"] = "train_stochastic"
-
     attrs_gfdt = copy(common_attrs)
     attrs_gfdt["save_every"] = cfg["datasets.gfdt_save_every"]
     attrs_gfdt["nsamples"] = cfg["datasets.gfdt_nsamples"]
@@ -779,7 +1161,87 @@ function generate_iteration_datasets(cfg::Dict, theta::NTuple{5,Float64}, iterat
     attrs_gfdt["rng_seed"] = gfdt_seed
     attrs_gfdt["role"] = "gfdt_stochastic"
 
-    ArnoldCommon.save_x_dataset(train_path, cfg["datasets.train_key"], train_data, attrs_train)
+    if generate_train
+        base = div(train_total, train_ntraj)
+        remn = mod(train_total, train_ntraj)
+        counts = [base + (i <= remn ? 1 : 0) for i in 1:train_ntraj]
+        train_chunks = Vector{Matrix{Float32}}(undef, train_ntraj)
+        train_errors = fill("", train_ntraj)
+
+        build_chunk! = function (i::Int)
+            ns = counts[i]
+            if ns <= 0
+                train_chunks[i] = zeros(Float32, 0, cfg["integration.K"])
+                train_errors[i] = ""
+                return nothing
+            end
+            try
+                chunk_seed = train_seed + 100_000 * i
+                train_chunks[i] = ArnoldCommon.generate_reduced_x_timeseries(
+                    K=cfg["integration.K"],
+                    F=cfg["closure.F"],
+                    alpha0=a0,
+                    alpha1=a1,
+                    alpha2=a2,
+                    alpha3=a3,
+                    sigma=sig,
+                    dt=cfg["integration.dt"],
+                    spinup_steps=cfg["datasets.spinup_steps"],
+                    save_every=cfg["datasets.train_save_every"],
+                    nsamples=ns,
+                    rng_seed=chunk_seed,
+                    max_abs_state=1e4,
+                    max_restarts=40,
+                    state_min=cfg["numerical.state_min"],
+                    state_max=cfg["numerical.state_max"],
+                    max_boundary_hits=cfg["numerical.max_boundary_hits"],
+                )
+                train_errors[i] = ""
+            catch err
+                train_errors[i] = sprint(showerror, err)
+                train_chunks[i] = zeros(Float32, 0, cfg["integration.K"])
+            end
+            return nothing
+        end
+
+        if train_parallel
+            Base.Threads.@threads for i in 1:train_ntraj
+                build_chunk!(i)
+            end
+        else
+            for i in 1:train_ntraj
+                build_chunk!(i)
+            end
+        end
+
+        for i in 1:train_ntraj
+            isempty(train_errors[i]) || error("Training trajectory chunk $(i) failed: $(train_errors[i])")
+        end
+
+        train_data = Array{Float32}(undef, train_total, cfg["integration.K"])
+        pos = 1
+        for i in 1:train_ntraj
+            chunk = train_chunks[i]
+            nrows = size(chunk, 1)
+            if nrows > 0
+                @views train_data[pos:(pos + nrows - 1), :] .= chunk
+                pos += nrows
+            end
+        end
+        pos == train_total + 1 || error("Training dataset assembly mismatch: expected $(train_total) rows, got $(pos - 1)")
+
+        train_path = joinpath(iter_data_dir, "train_stochastic.hdf5")
+        attrs_train = copy(common_attrs)
+        attrs_train["save_every"] = cfg["datasets.train_save_every"]
+        attrs_train["nsamples"] = cfg["datasets.train_nsamples"]
+        attrs_train["spinup_steps"] = cfg["datasets.spinup_steps"]
+        attrs_train["rng_seed"] = train_seed
+        attrs_train["ensemble_trajectories"] = train_ntraj
+        attrs_train["parallel_trajectories"] = train_parallel
+        attrs_train["role"] = "train_stochastic"
+        ArnoldCommon.save_x_dataset(train_path, cfg["datasets.train_key"], train_data, attrs_train)
+    end
+
     ArnoldCommon.save_x_dataset(gfdt_path, cfg["datasets.gfdt_key"], gfdt_data, attrs_gfdt)
 
     return train_path, gfdt_path
@@ -888,6 +1350,7 @@ end
 
 function compute_fd_jacobian_asymptotic(theta::NTuple{5,Float64}, cfg::Dict{String,Any})
     compute_steady_state_observables = require_main_symbol(:compute_steady_state_observables)
+    n_obs = observable_count(cfg)
 
     h_abs = Float64.(cfg["responses.finite_difference.h_abs"])
     h_rel = Float64(cfg["responses.finite_difference.h_rel"])
@@ -903,105 +1366,174 @@ function compute_fd_jacobian_asymptotic(theta::NTuple{5,Float64}, cfg::Dict{Stri
     fd_parallel_traj = Bool(cfg["responses.finite_difference.parallel_trajectories"])
     allow_nested_parallel = Bool(get(cfg, "performance.allow_nested_parallel", true))
     parallel_fd_columns = Bool(cfg["performance.parallel_fd_columns"])
+    nested_parallel_active = Bool(get(cfg, "runtime.method_parallel_active", false))
 
     length(h_abs) == 5 || error("responses.finite_difference.h_abs must have length 5")
     n_samples >= 1 || error("responses.finite_difference.nsamples must be >= 1")
     spinup >= 0 || error("responses.finite_difference.spinup must be >= 0")
     h_rel > 0 || error("responses.finite_difference.h_rel must be > 0")
 
-    J = zeros(Float64, 5, 5)
+    J = zeros(Float64, n_obs, 5)
     iter_id = Int(get(cfg, "runtime.iteration", 0))
-    col_errors = fill("", 5)
+    if use_fd_ensemble
+        h_current = [max(h_abs[ip], h_rel * max(abs(theta[ip]), 1.0)) for ip in 1:5]
+        attempts = zeros(Int, 5)
+        pending = collect(1:5)
+        do_parallel = (parallel_fd_columns || fd_parallel_traj) && Base.Threads.nthreads() > 1
+        do_parallel = do_parallel && (allow_nested_parallel || !nested_parallel_active)
 
-    compute_column! = function (ip::Int)
-        h = max(h_abs[ip], h_rel * max(abs(theta[ip]), 1.0))
-        accepted = false
-        last_err = ""
-        for attempt in 0:max_h_shrinks
-            tp = collect(theta)
-            tm = collect(theta)
-            tp[ip] += h
-            tm[ip] -= h
-            theta_p = (tp[1], tp[2], tp[3], tp[4], tp[5])
-            theta_m = (tm[1], tm[2], tm[3], tm[4], tm[5])
+        while !isempty(pending)
+            n_pending = length(pending)
+            obs_plus = Array{Float64,3}(undef, n_obs, fd_trajectories, n_pending)
+            obs_minus = Array{Float64,3}(undef, n_obs, fd_trajectories, n_pending)
+            task_errors = fill("", n_pending, fd_trajectories)
 
-            seed = seed_base + 1_000_000 * ip + 100_000 * attempt + 10_000_000 * iter_id
-            @info "Computing calibration asymptotic FD Jacobian column" parameter = PARAM_NAMES[ip] h n_samples spinup seed attempt = attempt + 1
-            try
-                if use_fd_ensemble
-                    force_serial_inner = parallel_fd_columns && !allow_nested_parallel
-                    avg_p = estimate_observables_ensemble(
-                        Float64[theta_p[1], theta_p[2], theta_p[3], theta_p[4], theta_p[5]],
-                        cfg;
-                        trajectories=fd_trajectories,
-                        samples_per_trajectory=fd_samples_per_traj,
-                        save_every=fd_save_every,
-                        spinup_steps=spinup,
-                        seed_base=seed,
-                        parallel_trajectories=fd_parallel_traj,
-                        seed_offset=11,
-                        force_serial=force_serial_inner,
-                    )
-                    avg_m = estimate_observables_ensemble(
-                        Float64[theta_m[1], theta_m[2], theta_m[3], theta_m[4], theta_m[5]],
-                        cfg;
-                        trajectories=fd_trajectories,
-                        samples_per_trajectory=fd_samples_per_traj,
-                        save_every=fd_save_every,
-                        spinup_steps=spinup,
-                        seed_base=seed,
-                        parallel_trajectories=fd_parallel_traj,
-                        seed_offset=29,
-                        force_serial=force_serial_inner,
-                    )
+            for pidx in 1:n_pending
+                ip = pending[pidx]
+                attempts[ip] += 1
+                seed = seed_base + 1_000_000 * ip + 100_000 * (attempts[ip] - 1) + 10_000_000 * iter_id
+                @info "Computing calibration asymptotic FD Jacobian column" parameter = PARAM_NAMES[ip] h = h_current[ip] n_samples = fd_trajectories * fd_samples_per_traj spinup seed attempt = attempts[ip]
+            end
+
+            run_pair! = function (pidx::Int, trj::Int)
+                ip = pending[pidx]
+                h = h_current[ip]
+                tp = collect(theta)
+                tm = collect(theta)
+                tp[ip] += h
+                tm[ip] -= h
+                theta_p = (tp[1], tp[2], tp[3], tp[4], tp[5])
+                theta_m = (tm[1], tm[2], tm[3], tm[4], tm[5])
+                seed = seed_base + 1_000_000 * ip + 100_000 * (attempts[ip] - 1) + 10_000_000 * iter_id + 11 + 10_000 * trj
+                local_cfg = copy(cfg)
+                local_cfg["integration.save_every"] = fd_save_every
+                try
+                    obs_p = compute_steady_state_observables(theta_p, local_cfg, fd_samples_per_traj, spinup, seed)
+                    obs_m = compute_steady_state_observables(theta_m, local_cfg, fd_samples_per_traj, spinup, seed)
+                    @views obs_plus[:, trj, pidx] .= Float64.(obs_p)
+                    @views obs_minus[:, trj, pidx] .= Float64.(obs_m)
+                catch err
+                    task_errors[pidx, trj] = sprint(showerror, err)
+                end
+                return nothing
+            end
+
+            ntasks = n_pending * fd_trajectories
+            if do_parallel && ntasks > 1
+                Base.Threads.@threads for task_idx in 1:ntasks
+                    pidx = 1 + (task_idx - 1) ÷ fd_trajectories
+                    trj = 1 + (task_idx - 1) % fd_trajectories
+                    run_pair!(pidx, trj)
+                end
+            else
+                for pidx in 1:n_pending
+                    for trj in 1:fd_trajectories
+                        run_pair!(pidx, trj)
+                    end
+                end
+            end
+
+            next_pending = Int[]
+            for pidx in 1:n_pending
+                ip = pending[pidx]
+                err = findfirst(msg -> !isempty(msg), view(task_errors, pidx, :))
+                if err === nothing
+                    avg_p = vec(mean(@view obs_plus[:, :, pidx]; dims=2))
+                    avg_m = vec(mean(@view obs_minus[:, :, pidx]; dims=2))
+                    col = (avg_p .- avg_m) ./ (2 * h_current[ip])
+                    all(isfinite, col) || error("FD column has non-finite entries")
+                    @views J[:, ip] .= col
                 else
+                    reason = task_errors[pidx, err]
+                    if attempts[ip] >= max_h_shrinks + 1
+                        error("Asymptotic FD Jacobian failed for parameter $(PARAM_NAMES[ip]) after $(max_h_shrinks + 1) attempts. Last error: $reason")
+                    end
+                    @warn "Retrying calibration asymptotic FD Jacobian with smaller h" parameter = PARAM_NAMES[ip] h = h_current[ip] attempt = attempts[ip] reason = reason
+                    h_current[ip] *= h_shrink_factor
+                    push!(next_pending, ip)
+                end
+            end
+            pending = next_pending
+        end
+    else
+        col_errors = fill("", 5)
+
+        compute_column! = function (ip::Int)
+            h = max(h_abs[ip], h_rel * max(abs(theta[ip]), 1.0))
+            accepted = false
+            last_err = ""
+            for attempt in 0:max_h_shrinks
+                tp = collect(theta)
+                tm = collect(theta)
+                tp[ip] += h
+                tm[ip] -= h
+                theta_p = (tp[1], tp[2], tp[3], tp[4], tp[5])
+                theta_m = (tm[1], tm[2], tm[3], tm[4], tm[5])
+
+                seed = seed_base + 1_000_000 * ip + 100_000 * attempt + 10_000_000 * iter_id
+                @info "Computing calibration asymptotic FD Jacobian column" parameter = PARAM_NAMES[ip] h n_samples spinup seed attempt = attempt + 1
+                try
                     avg_p = compute_steady_state_observables(theta_p, cfg, n_samples, spinup, seed)
                     avg_m = compute_steady_state_observables(theta_m, cfg, n_samples, spinup, seed)
-                end
-                col = (avg_p .- avg_m) ./ (2h)
-                all(isfinite, col) || error("FD column has non-finite entries")
-                @views J[:, ip] .= col
-                accepted = true
-                break
-            catch err
-                last_err = sprint(showerror, err)
-                if attempt == max_h_shrinks
+                    col = (avg_p .- avg_m) ./ (2h)
+                    all(isfinite, col) || error("FD column has non-finite entries")
+                    @views J[:, ip] .= col
+                    accepted = true
                     break
+                catch err
+                    last_err = sprint(showerror, err)
+                    if attempt == max_h_shrinks
+                        break
+                    end
+                    @warn "Retrying calibration asymptotic FD Jacobian with smaller h" parameter = PARAM_NAMES[ip] h attempt = attempt + 1 reason = last_err
+                    h *= h_shrink_factor
                 end
-                @warn "Retrying calibration asymptotic FD Jacobian with smaller h" parameter = PARAM_NAMES[ip] h attempt = attempt + 1 reason = last_err
-                h *= h_shrink_factor
+            end
+
+            if accepted
+                col_errors[ip] = ""
+            else
+                col_errors[ip] = "Asymptotic FD Jacobian failed for parameter $(PARAM_NAMES[ip]) after $(max_h_shrinks + 1) attempts. Last error: $last_err"
+            end
+            return nothing
+        end
+
+        if parallel_fd_columns && (allow_nested_parallel || !nested_parallel_active)
+            Base.Threads.@threads for ip in 1:5
+                compute_column!(ip)
+            end
+        else
+            for ip in 1:5
+                compute_column!(ip)
             end
         end
 
-        if accepted
-            col_errors[ip] = ""
-        else
-            col_errors[ip] = "Asymptotic FD Jacobian failed for parameter $(PARAM_NAMES[ip]) after $(max_h_shrinks + 1) attempts. Last error: $last_err"
-        end
-        return nothing
-    end
-
-    if parallel_fd_columns
-        Base.Threads.@threads for ip in 1:5
-            compute_column!(ip)
-        end
-    else
         for ip in 1:5
-            compute_column!(ip)
+            isempty(col_errors[ip]) || error(col_errors[ip])
         end
-    end
-
-    for ip in 1:5
-        isempty(col_errors[ip]) || error(col_errors[ip])
     end
 
     all(isfinite, J) || error("Asymptotic finite-difference Jacobian contains non-finite values")
     return J
 end
 
+function apply_sigma_surgical_mask!(S::Matrix{Float64}; row_var::Int=2, col_sigma::Int=5)
+    n_obs, n_param = size(S)
+    col_sigma in 1:n_param || error("Sigma column index out of bounds: col_sigma=$(col_sigma), n_param=$(n_param)")
+    row_var in 1:n_obs || error("Variance row index out of bounds: row_var=$(row_var), n_obs=$(n_obs)")
+    @inbounds for j in 1:n_obs
+        if j != row_var
+            S[j, col_sigma] = 0.0
+        end
+    end
+    return S
+end
+
 function compute_iteration_jacobians(cfg, theta, gfdt_data_path, checkpoint_path, iteration, run_dir)
     X = load_x_matrix(gfdt_data_path, cfg["datasets.gfdt_key"], cfg["integration.K"])
     obs_ref = obs_ref_tuple(cfg)
+    obs_m = Int(cfg["observables.m"])
+    n_obs = observable_count(cfg)
 
     A = ArnoldCommon.compute_observables_series(
         X,
@@ -1010,6 +1542,7 @@ function compute_iteration_jacobians(cfg, theta, gfdt_data_path, checkpoint_path
         obs_ref.alpha1_ref,
         obs_ref.alpha2_ref,
         obs_ref.alpha3_ref,
+        obs_m,
     )
     G_obs = vec(mean(A; dims=2))
     all(isfinite, G_obs) || error("Observable averages contain non-finite values")
@@ -1018,6 +1551,7 @@ function compute_iteration_jacobians(cfg, theta, gfdt_data_path, checkpoint_path
     cfg["runtime.current_gfdt_path"] = gfdt_data_path
 
     n_lags, dt_obs = response_n_lags(cfg, size(X, 2))
+    apply_sigma_mask = Bool(cfg["calibration.apply_sigma_jacobian_mask"])
 
     out = Dict{String,NamedTuple{(:S,:G,:A,:times,:R_step,:C),Tuple{Matrix{Float64},Vector{Float64},Matrix{Float64},Vector{Float64},Array{Float64,3},Array{Float64,3}}}}()
 
@@ -1042,8 +1576,21 @@ function compute_iteration_jacobians(cfg, theta, gfdt_data_path, checkpoint_path
         )
 
         G_conj = cfg["responses.apply_score_correction"] ? unet.G_corr : unet.G_raw
-        C, R_step, times = ArnoldCommon.build_gfdt_response(A, G_conj, dt_obs, n_lags; mean_center=cfg["responses.mean_center"])
-        S = extract_asymptotic_jacobians(times, R_step; tail_window=cfg["responses.tail_window"])
+        C, R_step, times = ArnoldCommon.build_gfdt_response(
+            A,
+            G_conj,
+            dt_obs,
+            n_lags;
+            mean_center=cfg["responses.mean_center"],
+            impulse_tail_debias=cfg["responses.impulse_tail_debias"],
+            t_start=cfg["responses.t_start"],
+            t_end=cfg["responses.t_end"],
+            tail_taper=cfg["responses.impulse_tail_taper"],
+        )
+        S = extract_asymptotic_jacobians(times, R_step; t_start=cfg["responses.t_start"], t_end=cfg["responses.t_end"])
+        if apply_sigma_mask
+            apply_sigma_surgical_mask!(S; row_var=2, col_sigma=5)
+        end
         all(isfinite, S) || error("UNet Jacobian contains non-finite values")
 
         out["unet"] = (S=S, G=G_obs, A=A, times=times, R_step=R_step, C=C)
@@ -1060,8 +1607,21 @@ function compute_iteration_jacobians(cfg, theta, gfdt_data_path, checkpoint_path
         )
 
         G_conj = cfg["responses.apply_score_correction"] ? gauss.G_corr : gauss.G_raw
-        C, R_step, times = ArnoldCommon.build_gfdt_response(A, G_conj, dt_obs, n_lags; mean_center=cfg["responses.mean_center"])
-        S = extract_asymptotic_jacobians(times, R_step; tail_window=cfg["responses.tail_window"])
+        C, R_step, times = ArnoldCommon.build_gfdt_response(
+            A,
+            G_conj,
+            dt_obs,
+            n_lags;
+            mean_center=cfg["responses.mean_center"],
+            impulse_tail_debias=cfg["responses.impulse_tail_debias"],
+            t_start=cfg["responses.t_start"],
+            t_end=cfg["responses.t_end"],
+            tail_taper=cfg["responses.impulse_tail_taper"],
+        )
+        S = extract_asymptotic_jacobians(times, R_step; t_start=cfg["responses.t_start"], t_end=cfg["responses.t_end"])
+        if apply_sigma_mask
+            apply_sigma_surgical_mask!(S; row_var=2, col_sigma=5)
+        end
         all(isfinite, S) || error("Gaussian Jacobian contains non-finite values")
 
         out["gaussian"] = (S=S, G=G_obs, A=A, times=times, R_step=R_step, C=C)
@@ -1075,8 +1635,8 @@ function compute_iteration_jacobians(cfg, theta, gfdt_data_path, checkpoint_path
             G=G_obs,
             A=A,
             times=Float64[],
-            R_step=zeros(Float64, 5, 5, 0),
-            C=zeros(Float64, 5, 5, 0),
+            R_step=zeros(Float64, n_obs, 5, 0),
+            C=zeros(Float64, n_obs, 5, 0),
         )
     end
 
@@ -1089,9 +1649,32 @@ function diagonal_weight(A_subseries::Matrix{Float64})
     return Diagonal(1.0 ./ vars)
 end
 
-function inverse_cov_weight(A_subseries::Matrix{Float64})
-    A_of_x = x -> Float64.(collect(x))
-    return weight_inverse_cov_bridge(A_of_x, A_subseries)
+function inverse_cov_weight(A_subseries::Matrix{Float64}; base_jitter::Float64=1e-10, max_tries::Int=8)
+    n_obs, T = size(A_subseries)
+    T >= 2 || error("Need at least two samples to build inverse-covariance weight matrix")
+
+    mu = mean(A_subseries; dims=2)
+    A_centered = A_subseries .- mu
+    Sigma_obs = Symmetric((A_centered * A_centered') / max(T - 1, 1))
+
+    jitter = base_jitter
+    F = nothing
+    for attempt in 1:max_tries
+        try
+            Sigma_reg = Symmetric(Matrix(Sigma_obs) + jitter * I)
+            F = cholesky(Sigma_reg; check=true)
+            break
+        catch err
+            if attempt == max_tries
+                error("Failed to factorize observable covariance after $max_tries attempts: $(sprint(showerror, err))")
+            end
+            jitter *= 10.0
+        end
+    end
+    F === nothing && error("Failed to construct inverse-covariance weight matrix")
+
+    B = F \ Matrix{Float64}(I, n_obs, n_obs)
+    return Symmetric(B)
 end
 
 function build_weight_matrix(cfg::Dict{String,Any}, active_idx::Vector{Int})
@@ -1123,19 +1706,56 @@ function build_weight_matrix(cfg::Dict{String,Any}, active_idx::Vector{Int})
     error("Unsupported calibration.weight_matrix mode '$mode'")
 end
 
+function weighted_residual_norm(W::AbstractMatrix, r::AbstractVector{<:Real})
+    v = Float64.(r)
+    q = dot(v, W * v)
+    q = isfinite(q) ? max(q, 0.0) : Inf
+    return sqrt(q)
+end
+
+function weighted_observable_residual(cfg::Dict{String,Any},
+    G::AbstractVector{<:Real},
+    A_target::AbstractVector{<:Real};
+    active_idx::Union{Nothing,Vector{Int}}=nothing,
+    W::Union{Nothing,AbstractMatrix}=nothing)
+    idx = active_idx === nothing ? cfg["calibration.active_observables"] : active_idx
+    r = Float64.(G[idx] .- A_target[idx])
+    W_use = W === nothing ? build_weight_matrix(cfg, idx) : Matrix{Float64}(W)
+    return weighted_residual_norm(W_use, r)
+end
+
 function estimate_observables(theta_candidate::Vector{Float64}, cfg::Dict{String,Any})
-    compute_steady_state_observables = require_main_symbol(:compute_steady_state_observables)
-    # Use next-iteration GFDT seed to align line-search acceptance with the
-    # actual dataset-generation stability constraints.
-    seed = cfg["datasets.gfdt_rng_seed_base"] + Int(get(cfg, "runtime.iteration", 0)) + 1
-    obs = compute_steady_state_observables(
-        theta_to_tuple(theta_candidate),
-        cfg,
-        cfg["calibration.line_search_samples"],
-        cfg["calibration.line_search_spinup"],
-        seed,
+    return estimate_observables_ensemble(
+        theta_candidate,
+        cfg;
+        trajectories=Int(cfg["observables_ensemble.trajectories"]),
+        samples_per_trajectory=Int(cfg["observables_ensemble.samples_per_trajectory"]),
+        save_every=Int(cfg["observables_ensemble.save_every"]),
+        spinup_steps=Int(cfg["observables_ensemble.spinup_steps"]),
+        seed_base=Int(cfg["observables_ensemble.seed_base"]),
+        parallel_trajectories=Bool(cfg["observables_ensemble.parallel_trajectories"]),
     )
-    return vec(Float64.(obs))
+end
+
+function acceptance_method_seed_offset(cfg::Dict{String,Any})
+    return 0
+end
+
+function resolve_acceptance_ensemble_settings(cfg::Dict{String,Any};
+    reference_residual::Real=Inf,
+    cond_sub::Real=NaN)
+    return (
+        trajectories=Int(cfg["observables_ensemble.trajectories"]),
+        samples_per_trajectory=Int(cfg["observables_ensemble.samples_per_trajectory"]),
+        save_every=Int(cfg["observables_ensemble.save_every"]),
+        spinup_steps=Int(cfg["observables_ensemble.spinup_steps"]),
+        seed_base=Int(cfg["observables_ensemble.seed_base"]),
+        parallel_trajectories=Bool(cfg["observables_ensemble.parallel_trajectories"]),
+        refined=false,
+        refine_reason="shared_observable_estimator",
+        reference_residual=Float64(reference_residual),
+        conditioning_reference=Float64(cond_sub),
+    )
 end
 
 function estimate_observables_ensemble(theta_candidate::Vector{Float64}, cfg::Dict{String,Any};
@@ -1149,9 +1769,10 @@ function estimate_observables_ensemble(theta_candidate::Vector{Float64}, cfg::Di
     force_serial::Bool=false)
     compute_steady_state_observables = require_main_symbol(:compute_steady_state_observables)
     theta_tuple = theta_to_tuple(theta_candidate)
+    n_obs = observable_count(cfg)
 
     iter_id = Int(get(cfg, "runtime.iteration", 0))
-    obs_mat = Matrix{Float64}(undef, 5, trajectories)
+    obs_mat = Matrix{Float64}(undef, n_obs, trajectories)
     traj_errors = fill("", trajectories)
 
     nested_parallel_active = Bool(get(cfg, "runtime.method_parallel_active", false))
@@ -1204,6 +1825,44 @@ function estimate_observables_for_convergence(theta_candidate::Vector{Float64}, 
     )
 end
 
+function estimate_observables_for_acceptance(theta_candidate::Vector{Float64}, cfg::Dict{String,Any};
+    seed_offset::Int=0,
+    force_serial::Bool=false,
+    settings=nothing)
+    acc = settings === nothing ? resolve_acceptance_ensemble_settings(cfg) : settings
+    method_offset = acceptance_method_seed_offset(cfg)
+    return estimate_observables_ensemble(
+        theta_candidate,
+        cfg;
+        trajectories=Int(acc.trajectories),
+        samples_per_trajectory=Int(acc.samples_per_trajectory),
+        save_every=Int(acc.save_every),
+        spinup_steps=Int(acc.spinup_steps),
+        seed_base=Int(acc.seed_base),
+        parallel_trajectories=Bool(acc.parallel_trajectories),
+        seed_offset=method_offset + seed_offset,
+        force_serial=force_serial,
+    )
+end
+
+function relative_step_norm(delta::AbstractVector{<:Real}, theta_ref::AbstractVector{<:Real})
+    return norm(Float64.(delta)) / max(norm(Float64.(theta_ref)), eps())
+end
+
+function active_relative_step_cap(cfg::Dict{String,Any}, cond_sub::Real)
+    cap = Inf
+    max_rel = Float64(get(cfg, "calibration.max_relative_step", 0.0))
+    if max_rel > 0
+        cap = min(cap, max_rel)
+    end
+    cond_threshold = Float64(get(cfg, "calibration.conditioning_step_threshold", Inf))
+    cond_cap = Float64(get(cfg, "calibration.conditioned_max_relative_step", 0.0))
+    if isfinite(Float64(cond_sub)) && Float64(cond_sub) >= cond_threshold && cond_cap > 0
+        cap = min(cap, cond_cap)
+    end
+    return cap
+end
+
 function theta_candidate_is_stable(theta_candidate::Vector{Float64}, cfg::Dict{String,Any})
     iter_id = Int(get(cfg, "runtime.iteration", 0))
     test_iter = iter_id + 1
@@ -1228,7 +1887,7 @@ function theta_candidate_is_stable(theta_candidate::Vector{Float64}, cfg::Dict{S
         try
             ArnoldCommon.generate_reduced_x_timeseries(
                 K=cfg["integration.K"],
-                F=cfg["integration.F"],
+                F=cfg["closure.F"],
                 alpha0=theta_candidate[1],
                 alpha1=theta_candidate[2],
                 alpha2=theta_candidate[3],
@@ -1241,6 +1900,9 @@ function theta_candidate_is_stable(theta_candidate::Vector{Float64}, cfg::Dict{S
                 rng_seed=spec.seed,
                 max_abs_state=max_abs_state,
                 max_restarts=12,
+                state_min=cfg["numerical.state_min"],
+                state_max=cfg["numerical.state_max"],
+                max_boundary_hits=max(3, min(12, Int(cfg["numerical.max_boundary_hits"]))),
             )
         catch
             return false
@@ -1259,183 +1921,275 @@ function perform_newton_update(S, G, A_target, theta, cfg)
 
     W_sub = build_weight_matrix(cfg, active_idx)
 
-    gamma = cfg["calibration.regularization_gamma"]
     nfree = length(free_idx)
-    Gamma_sub = Symmetric(Matrix{Float64}(I, nfree, nfree) * gamma)
-
-    correction_sub, raw_diag = newton_step_bridge(S_sub, W_sub, Gamma_sub, G_sub, A_sub)
-
-    correction_full = zeros(Float64, 5)
-    correction_full[free_idx] .= correction_sub
-
     theta_current = Float64.(theta)
-    damping = cfg["calibration.damping"]
+    gamma_requested = Float64(cfg["calibration.regularization_gamma"])
+    gamma_floor = max(gamma_requested, 1e-8)
+    damping_requested = Float64(cfg["calibration.damping"])
+    lm_max_attempts = Int(cfg["calibration.lm_max_attempts"])
+    lm_growth_factor = Float64(cfg["calibration.lm_growth_factor"])
+    min_rho = Float64(cfg["calibration.min_actual_to_predicted_ratio"])
 
-    residual_before = norm(G_sub .- A_sub)
-    theta_best = theta_current .- damping .* correction_full
-    applied_step = damping .* correction_full
+    cond_sub = try
+        cond(S_sub)
+    catch
+        NaN
+    end
+
+    line_search_used = Bool(cfg["calibration.line_search"])
+    line_search_max = line_search_used ? Int(cfg["calibration.line_search_max"]) : 0
+    nested_parallel_active = Bool(get(cfg, "runtime.method_parallel_active", false))
+    allow_nested_parallel = Bool(get(cfg, "performance.allow_nested_parallel", true))
+    requested_parallel_line_search = Bool(get(cfg, "performance.parallel_line_search", true))
+
+    previous_obs_residual = Float64(get(cfg, "runtime.previous_observable_residual", Inf))
+    acceptance_settings = resolve_acceptance_ensemble_settings(
+        cfg;
+        reference_residual=previous_obs_residual,
+        cond_sub=cond_sub,
+    )
+    acceptance_parallel_eval = Bool(acceptance_settings.parallel_trajectories) &&
+        Int(acceptance_settings.trajectories) > 1 &&
+        Base.Threads.nthreads() > 1
+    do_parallel_line_search = requested_parallel_line_search && line_search_used && line_search_max > 0
+    do_parallel_line_search = do_parallel_line_search && (allow_nested_parallel || !nested_parallel_active)
+    do_parallel_line_search = do_parallel_line_search && !acceptance_parallel_eval
+    force_serial_acceptance = false
+    acceptance_fallback_used = false
+    acceptance_current = try
+        estimate_observables_for_acceptance(
+            theta_current,
+            cfg;
+            force_serial=force_serial_acceptance,
+            settings=acceptance_settings,
+        )
+    catch err
+        acceptance_fallback_used = true
+        @warn "Acceptance-ensemble estimate failed at current theta; falling back to GFDT observables" method = get(cfg, "runtime.current_method", "") error = sprint(showerror, err)
+        vec(Float64.(G))
+    end
+
+    residual_before = weighted_residual_norm(W_sub, acceptance_current[active_idx] .- A_sub)
+    residual_before_linear = weighted_residual_norm(W_sub, G_sub .- A_sub)
+    residual_before_unweighted = norm(acceptance_current[active_idx] .- A_sub)
+
+    theta_best = copy(theta_current)
+    applied_step = zeros(Float64, 5)
     residual_after = residual_before
-    line_search_scale = damping
-    line_search_used = false
+    residual_after_predicted = residual_before
+    line_search_scale = 0.0
     line_search_accepted = false
     stability_checked = false
-    stability_accepted = true
+    stability_accepted = false
+    raw_diag = (cond=NaN, nrm_rhs=NaN)
+    correction_full = zeros(Float64, 5)
+    correction_full_raw = zeros(Float64, 5)
+    lm_attempts_used = 0
+    gamma_effective = gamma_requested
+    predicted_reduction = 0.0
+    actual_reduction = 0.0
+    actual_to_predicted_ratio = -Inf
+    step_cap_triggered = false
+    step_cap_factor = 1.0
+    damping_effective = damping_requested
+    best_candidate_residual = Inf
 
-    if cfg["calibration.line_search"]
-        line_search_used = true
-        line_search_max = cfg["calibration.line_search_max"]
-        best_residual = Inf
-        best_theta = copy(theta_best)
-        best_step = copy(applied_step)
-        best_scale = damping
+    for lm_attempt in 1:lm_max_attempts
+        lm_attempts_used = lm_attempt
+        gamma_effective = gamma_requested > 0 ? gamma_requested * (lm_growth_factor ^ (lm_attempt - 1)) :
+            gamma_floor * (lm_growth_factor ^ (lm_attempt - 1))
+        Gamma_sub = Symmetric(Matrix{Float64}(I, nfree, nfree) * gamma_effective)
+        correction_sub, raw_diag = newton_step_bridge(S_sub, W_sub, Gamma_sub, G_sub, A_sub)
 
-        nested_parallel_active = Bool(get(cfg, "runtime.method_parallel_active", false))
-        allow_nested_parallel = Bool(get(cfg, "performance.allow_nested_parallel", true))
-        do_parallel_line_search = Bool(get(cfg, "performance.parallel_line_search", true))
-        do_parallel_line_search = do_parallel_line_search && (allow_nested_parallel || !nested_parallel_active)
+        fill!(correction_full_raw, 0.0)
+        correction_full_raw[free_idx] .= correction_sub
 
-        if do_parallel_line_search && line_search_max > 0
-            scales = [damping / (2.0 ^ h) for h in 0:line_search_max]
+        damping_effective = damping_requested
+        step_cap_triggered = false
+        step_cap_factor = 1.0
+        rel_cap = active_relative_step_cap(cfg, cond_sub)
+        base_relative_step = relative_step_norm(damping_requested .* correction_full_raw, theta_current)
+        if isfinite(rel_cap) && base_relative_step > rel_cap
+            step_cap_triggered = true
+            step_cap_factor = rel_cap / max(base_relative_step, eps())
+            damping_effective *= step_cap_factor
+        end
+
+        scales = [damping_effective / (2.0 ^ h) for h in 0:line_search_max]
+        linear_delta_obs = S_sub * correction_sub
+
+        evaluate_candidate = function (scale::Float64)
+            try
+                theta_try = theta_current .- scale .* correction_full_raw
+                obs_try = estimate_observables_for_acceptance(
+                    theta_try,
+                    cfg;
+                    force_serial=force_serial_acceptance,
+                    settings=acceptance_settings,
+                )
+                res_try = weighted_residual_norm(W_sub, obs_try[active_idx] .- A_sub)
+                pred_obs = acceptance_current[active_idx] .- scale .* linear_delta_obs
+                pred_res = weighted_residual_norm(W_sub, pred_obs .- A_sub)
+                pred_red = residual_before - pred_res
+                act_red = residual_before - res_try
+                need_stability = act_red > 0
+                stable_try = true
+                if need_stability
+                    stable_try = theta_candidate_is_stable(theta_try, cfg)
+                end
+                rho = pred_red > eps() ? act_red / pred_red : -Inf
+                accepted = act_red > 0 && pred_red > eps() && rho >= min_rho && stable_try
+                return (
+                    scale=scale,
+                    theta_try=theta_try,
+                    obs_try=obs_try,
+                    res_try=res_try,
+                    pred_res=pred_res,
+                    pred_red=pred_red,
+                    act_red=act_red,
+                    rho=rho,
+                    need_stability=need_stability,
+                    stable_try=stable_try,
+                    accepted=accepted,
+                    err="",
+                )
+            catch err
+                return (
+                    scale=scale,
+                    theta_try=copy(theta_current),
+                    obs_try=copy(acceptance_current),
+                    res_try=Inf,
+                    pred_res=Inf,
+                    pred_red=-Inf,
+                    act_red=-Inf,
+                    rho=-Inf,
+                    need_stability=false,
+                    stable_try=false,
+                    accepted=false,
+                    err=sprint(showerror, err),
+                )
+            end
+        end
+
+        results = Vector{Any}(undef, length(scales))
+        if do_parallel_line_search
             max_parallel = min(length(scales), max(1, Int(get(cfg, "performance.max_parallel_line_search", 3))), Base.Threads.nthreads())
             sem = Base.Semaphore(max_parallel)
-            results = Vector{Any}(undef, length(scales))
-
             @sync for idx in eachindex(scales)
                 scale = scales[idx]
                 Base.Threads.@spawn begin
                     Base.acquire(sem)
                     try
-                        theta_try = theta_current .- scale .* correction_full
-                        G_try = estimate_observables(theta_try, cfg)
-                        res_try = norm(G_try[active_idx] .- A_sub)
-                        need_stability = res_try < residual_before
-                        stable_try = true
-                        if need_stability
-                            stable_try = theta_candidate_is_stable(theta_try, cfg)
-                        end
-                        results[idx] = (
-                            scale=scale,
-                            theta_try=theta_try,
-                            res_try=res_try,
-                            need_stability=need_stability,
-                            stable_try=stable_try,
-                            err="",
-                        )
-                    catch err
-                        results[idx] = (
-                            scale=scale,
-                            theta_try=copy(theta_current),
-                            res_try=Inf,
-                            need_stability=false,
-                            stable_try=false,
-                            err=sprint(showerror, err),
-                        )
+                        results[idx] = evaluate_candidate(scale)
                     finally
                         Base.release(sem)
                     end
                 end
             end
-
-            for idx in eachindex(scales)
-                r = results[idx]
-                if !isempty(r.err)
-                    @warn "Line search evaluation failed for candidate theta; trying smaller step" scale = r.scale error = r.err
-                    continue
-                end
-                if r.need_stability
-                    stability_checked = true
-                end
-                if r.need_stability && !r.stable_try
-                    @warn "Rejecting Newton candidate: unstable stochastic rollout" scale = r.scale res_try = r.res_try
-                    continue
-                end
-                if r.res_try < best_residual
-                    best_residual = r.res_try
-                    best_theta .= r.theta_try
-                    best_step .= r.scale .* correction_full
-                    best_scale = r.scale
-                end
-                if r.res_try < residual_before
-                    line_search_accepted = true
-                    stability_accepted = true
-                    theta_best .= r.theta_try
-                    applied_step .= r.scale .* correction_full
-                    residual_after = r.res_try
-                    line_search_scale = r.scale
-                    break
-                end
-            end
         else
-            for halvings in 0:line_search_max
-                scale = damping / (2.0 ^ halvings)
-                theta_try = theta_current .- scale .* correction_full
-                try
-                    G_try = estimate_observables(theta_try, cfg)
-                    res_try = norm(G_try[active_idx] .- A_sub)
-                    need_stability = res_try < best_residual || res_try < residual_before
-                    stable_try = true
-                    if need_stability
-                        stability_checked = true
-                        stable_try = theta_candidate_is_stable(theta_try, cfg)
-                    end
-                    if !stable_try
-                        @warn "Rejecting Newton candidate: unstable stochastic rollout" scale res_try
-                        continue
-                    end
-                    if res_try < best_residual
-                        best_residual = res_try
-                        best_theta .= theta_try
-                        best_step .= scale .* correction_full
-                        best_scale = scale
-                    end
-                    if res_try < residual_before
-                        line_search_accepted = true
-                        stability_accepted = true
-                        theta_best .= theta_try
-                        applied_step .= scale .* correction_full
-                        residual_after = res_try
-                        line_search_scale = scale
-                        break
-                    end
-                catch err
-                    @warn "Line search evaluation failed for candidate theta; trying smaller step" scale error = sprint(showerror, err)
-                end
+            for idx in eachindex(scales)
+                results[idx] = evaluate_candidate(scales[idx])
             end
         end
 
-        if !line_search_accepted
-            if isfinite(best_residual) && best_residual < residual_before
-                theta_best .= best_theta
-                applied_step .= best_step
-                residual_after = best_residual
-                line_search_scale = best_scale
-                stability_accepted = true
-            else
-                # Reject the update if no candidate improved residual.
-                theta_best .= theta_current
-                applied_step .= 0.0
-                residual_after = residual_before
-                line_search_scale = 0.0
-                stability_accepted = false
+        accepted_results = Any[]
+        local_best_residual = Inf
+        for r in results
+            if !isempty(r.err)
+                @warn "Acceptance evaluation failed for candidate theta; trying stronger regularization" scale = r.scale gamma = gamma_effective error = r.err
+                continue
+            end
+            if r.need_stability
+                stability_checked = true
+            end
+            if r.need_stability && !r.stable_try
+                @warn "Rejecting Newton candidate: unstable stochastic rollout" scale = r.scale gamma = gamma_effective res_try = r.res_try
+                continue
+            end
+            local_best_residual = min(local_best_residual, r.res_try)
+            if r.accepted
+                push!(accepted_results, r)
             end
         end
+        best_candidate_residual = min(best_candidate_residual, local_best_residual)
+
+        if !isempty(accepted_results)
+            best_idx = argmin([r.res_try for r in accepted_results])
+            chosen = accepted_results[best_idx]
+            theta_best .= chosen.theta_try
+            applied_step .= chosen.scale .* correction_full_raw
+            correction_full .= correction_full_raw
+            residual_after = chosen.res_try
+            residual_after_predicted = chosen.pred_res
+            predicted_reduction = chosen.pred_red
+            actual_reduction = chosen.act_red
+            actual_to_predicted_ratio = chosen.rho
+            line_search_scale = chosen.scale
+            line_search_accepted = true
+            stability_accepted = true
+            break
+        end
+    end
+
+    if !line_search_accepted
+        theta_best .= theta_current
+        applied_step .= 0.0
+        correction_full .= correction_full_raw
+        residual_after = residual_before
+        residual_after_predicted = residual_before
+        predicted_reduction = 0.0
+        actual_reduction = 0.0
+        actual_to_predicted_ratio = -Inf
+        line_search_scale = 0.0
+        stability_accepted = false
     end
 
     diagnostics = Dict{String,Any}(
         "raw_cond" => get(raw_diag, :cond, NaN),
         "raw_rhs_norm" => get(raw_diag, :nrm_rhs, NaN),
         "residual_before" => residual_before,
+        "residual_before_linear" => residual_before_linear,
+        "residual_before_unweighted" => residual_before_unweighted,
         "residual_after" => residual_after,
+        "residual_after_predicted" => residual_after_predicted,
         "line_search_used" => line_search_used,
+        "parallel_line_search_requested" => requested_parallel_line_search,
+        "parallel_line_search_used" => do_parallel_line_search,
         "line_search_accepted" => line_search_accepted,
         "line_search_scale" => line_search_scale,
         "stability_checked" => stability_checked,
         "stability_accepted" => stability_accepted,
+        "lm_attempts_used" => lm_attempts_used,
+        "gamma_requested" => gamma_requested,
+        "gamma_effective" => gamma_effective,
+        "predicted_reduction" => predicted_reduction,
+        "actual_reduction" => actual_reduction,
+        "actual_to_predicted_ratio" => actual_to_predicted_ratio,
+        "acceptance_fallback_used" => acceptance_fallback_used,
+        "acceptance_trajectories" => Int(acceptance_settings.trajectories),
+        "acceptance_samples_per_trajectory" => Int(acceptance_settings.samples_per_trajectory),
+        "acceptance_save_every" => Int(acceptance_settings.save_every),
+        "acceptance_spinup_steps" => Int(acceptance_settings.spinup_steps),
+        "acceptance_refined" => Bool(acceptance_settings.refined),
+        "acceptance_refine_reason" => String(acceptance_settings.refine_reason),
+        "acceptance_reference_residual" => Float64(acceptance_settings.reference_residual),
+        "acceptance_conditioning_reference" => Float64(acceptance_settings.conditioning_reference),
+        "acceptance_parallel_trajectories" => Bool(acceptance_settings.parallel_trajectories),
+        "acceptance_parallel_eval" => acceptance_parallel_eval,
+        "damping_requested" => damping_requested,
+        "damping_effective" => damping_effective,
+        "relative_step_cap_active" => isfinite(active_relative_step_cap(cfg, cond_sub)),
+        "relative_step_cap" => isfinite(active_relative_step_cap(cfg, cond_sub)) ? active_relative_step_cap(cfg, cond_sub) : 0.0,
+        "relative_step_cap_triggered" => step_cap_triggered,
+        "relative_step_cap_factor" => step_cap_factor,
         "free_parameters" => free_idx,
         "active_observables" => active_idx,
         "weight_matrix_mode" => cfg["calibration.weight_matrix"],
         "correction_full" => copy(correction_full),
+        "correction_full_raw" => copy(correction_full_raw),
         "applied_step" => copy(applied_step),
+        "active_subproblem_cond" => cond_sub,
+        "best_candidate_residual" => best_candidate_residual,
     )
 
     return theta_best, applied_step, diagnostics
@@ -1452,7 +2206,7 @@ function check_convergence(state::CalibrationState, cfg::Dict)
     G_primary = get(cfg, "runtime.primary_observables", nothing)
     if A_target isa Vector{Float64} && G_primary isa Vector{Float64}
         active_idx = cfg["calibration.active_observables"]
-        obs_residual = norm(G_primary[active_idx] .- A_target[active_idx])
+        obs_residual = weighted_observable_residual(cfg, G_primary, A_target; active_idx=active_idx)
         cfg["runtime.last_obs_residual"] = obs_residual
         obs_ok = obs_residual < tol_obs
     else
@@ -1473,8 +2227,59 @@ function style_for_method(method::String)
     return (label=method, color=:gray30, linestyle=:solid, marker=:auto, markersize=4)
 end
 
+function save_response_iteration_archive(path::AbstractString,
+    cfg::Dict{String,Any},
+    jacobians,
+    observables::Dict{String,Vector{Float64}})
+    obs_names = observable_names(Int(cfg["observables.m"]))
+    obs_labels = observable_labels(Int(cfg["observables.m"]))
+    active_idx = Vector{Int}(get(cfg, "runtime.iteration_active_observables", cfg["calibration.active_observables"]))
+    free_idx = Vector{Int}(get(cfg, "runtime.iteration_free_parameters", cfg["calibration.free_parameters"]))
+    A_target = get(cfg, "runtime.A_target", nothing)
+
+    mkpath(dirname(path))
+    h5open(path, "w") do h5
+        h5["meta/observable_names"] = obs_names
+        h5["meta/observable_labels"] = obs_labels
+        h5["meta/param_names"] = PARAM_NAMES
+        h5["meta/active_observables"] = active_idx
+        h5["meta/free_parameters"] = free_idx
+        if A_target isa Vector{Float64}
+            h5["target/observables"] = A_target
+        end
+
+        for method in sort(collect(keys(jacobians)))
+            jr = jacobians[method]
+            current_obs = get(observables, method, jr.G)
+
+            h5[joinpath("jacobians", method)] = jr.S
+            h5[joinpath("observables", method, "gfdt_mean")] = jr.G
+            h5[joinpath("observables", method, "committed")] = current_obs
+            h5[joinpath("responses", method, "times")] = jr.times
+            h5[joinpath("responses", method, "R_step")] = jr.R_step
+            h5[joinpath("responses", method, "C")] = jr.C
+            h5[joinpath("selected_jacobians", method)] = jr.S[active_idx, :]
+            h5[joinpath("selected_observables", method)] = current_obs[active_idx]
+            if size(jr.R_step, 3) == 0
+                h5[joinpath("selected_responses", method, "times")] = jr.times
+                h5[joinpath("selected_responses", method, "R_step")] = zeros(Float64, length(active_idx), size(jr.S, 2), 0)
+                h5[joinpath("selected_responses", method, "C")] = zeros(Float64, length(active_idx), size(jr.S, 2), 0)
+            else
+                h5[joinpath("selected_responses", method, "times")] = jr.times
+                h5[joinpath("selected_responses", method, "R_step")] = jr.R_step[active_idx, :, :]
+                h5[joinpath("selected_responses", method, "C")] = jr.C[active_idx, :, :]
+            end
+        end
+    end
+    return path
+end
+
 function save_response_iteration_figure(path::AbstractString, cfg::Dict, jacobians)
     save_response_figure = require_main_symbol(:save_response_figure)
+    active_idx = Vector{Int}(get(cfg, "runtime.iteration_active_observables", cfg["calibration.active_observables"]))
+    isempty(active_idx) && return ""
+    obs_labels_all = observable_labels(Int(cfg["observables.m"]))
+    selected_obs_labels = [obs_labels_all[i] for i in active_idx]
 
     curves = NamedTuple[]
     times = nothing
@@ -1493,7 +2298,7 @@ function save_response_iteration_figure(path::AbstractString, cfg::Dict, jacobia
             label=style.label,
             color=style.color,
             linestyle=style.linestyle,
-            data=jr.R_step,
+            data=jr.R_step[active_idx, :, :],
         ))
     end
 
@@ -1507,7 +2312,7 @@ function save_response_iteration_figure(path::AbstractString, cfg::Dict, jacobia
             label=style.label,
             color=style.color,
             linestyle=style.linestyle,
-            jacobians=jacobians[method].S,
+            jacobians=jacobians[method].S[active_idx, :],
         ))
     end
 
@@ -1519,8 +2324,14 @@ function save_response_iteration_figure(path::AbstractString, cfg::Dict, jacobia
             label=style.label,
             color=style.color,
             linestyle=style.linestyle,
-            jacobians=jacobians["finite_difference"].S,
+            jacobians=jacobians["finite_difference"].S[active_idx, :],
         ))
+    end
+
+    title_text = if length(active_idx) == observable_count(cfg)
+        "Calibration iteration responses"
+    else
+        "Calibration iteration responses (tuned observables)"
     end
 
     return save_response_figure(
@@ -1528,8 +2339,9 @@ function save_response_iteration_figure(path::AbstractString, cfg::Dict, jacobia
         times,
         curves;
         asymptotic_curves=asymptotic_curves,
-        title_text="Calibration iteration responses",
+        title_text=title_text,
         dpi=cfg["figures.dpi"],
+        observable_row_labels=selected_obs_labels,
     )
 end
 
@@ -1550,6 +2362,8 @@ function save_stats_iteration_figure(path::AbstractString, cfg::Dict)
     n_model = min(size(X_model, 2), 50_000)
     obs_tensor = tensor_from_matrix(X_truth[:, 1:n_truth])
     gen_tensor = tensor_from_matrix(X_model[:, 1:n_model])
+    truth_dt = Float64(cfg["truth.save_every"]) * Float64(cfg["integration.dt"])
+    model_dt = Float64(cfg["datasets.gfdt_save_every"]) * Float64(cfg["integration.dt"])
 
     kl_mode, js_mode = sp.modewise_metrics(obs_tensor, gen_tensor; nbins=80, low_q=0.001, high_q=0.999)
     return sp.save_stats_figure_acf(
@@ -1560,6 +2374,8 @@ function save_stats_iteration_figure(path::AbstractString, cfg::Dict)
         js_mode,
         80;
         max_lag=200,
+        obs_dt=truth_dt,
+        gen_dt=model_dt,
         obs_label="Truth",
         gen_label="Current model",
     )
@@ -1589,25 +2405,22 @@ function save_iteration_outputs(state, cfg, run_dir, iteration, jacobians, obser
     end
 
     jac_path = joinpath(results_dir, "jacobians.hdf5")
-    h5open(jac_path, "w") do h5
-        for method in sort(collect(keys(jacobians)))
-            h5[joinpath("jacobians", method)] = jacobians[method].S
-        end
-    end
+    save_response_iteration_archive(jac_path, cfg, jacobians, observables)
 
     obs_path = joinpath(results_dir, "observables.csv")
     A_target = get(cfg, "runtime.A_target", nothing)
+    obs_names = observable_names(Int(cfg["observables.m"]))
     open(obs_path, "w") do io
         println(io, "method,observable,value")
         for method in sort(collect(keys(observables)))
             vals = observables[method]
-            for i in 1:min(length(vals), length(OBS_NAMES))
-                @printf(io, "%s,%s,%.16e\n", method, OBS_NAMES[i], vals[i])
+            for i in 1:min(length(vals), length(obs_names))
+                @printf(io, "%s,%s,%.16e\n", method, obs_names[i], vals[i])
             end
         end
         if A_target isa Vector{Float64}
-            for i in 1:min(length(A_target), length(OBS_NAMES))
-                @printf(io, "target,%s,%.16e\n", OBS_NAMES[i], A_target[i])
+            for i in 1:min(length(A_target), length(obs_names))
+                @printf(io, "target,%s,%.16e\n", obs_names[i], A_target[i])
             end
         end
     end
@@ -1619,7 +2432,7 @@ function save_iteration_outputs(state, cfg, run_dir, iteration, jacobians, obser
     end
 
     if cfg["figures.save_per_iteration"]
-        response_fig = joinpath(figures_dir, "responses_5x5.png")
+        response_fig = joinpath(figures_dir, @sprintf("responses_%dx5.png", observable_count(cfg)))
         try
             save_response_iteration_figure(response_fig, cfg, jacobians)
         catch err
@@ -1631,6 +2444,30 @@ function save_iteration_outputs(state, cfg, run_dir, iteration, jacobians, obser
             save_stats_iteration_figure(stats_fig, cfg)
         catch err
             @warn "Failed to save stats comparison figure" path = stats_fig error = sprint(showerror, err)
+        end
+
+        if cfg["figures.save_langevin_stats"]
+            score_langevin_fig = joinpath(figures_dir, "figB_train_vs_score_langevin_4x2.png")
+            score_langevin_archive = joinpath(results_dir, "score_langevin_samples.hdf5")
+            score_langevin_summary = joinpath(results_dir, "score_langevin_summary.toml")
+            train_data_path = get(cfg, "runtime.current_train_path", "")
+            checkpoint_path = get(cfg, "runtime.current_checkpoint_path", "")
+            try
+                fig_saved = save_score_langevin_iteration_figure(
+                    score_langevin_fig,
+                    cfg,
+                    train_data_path,
+                    checkpoint_path,
+                    iteration,
+                    archive_path=score_langevin_archive,
+                    summary_path=score_langevin_summary,
+                )
+                if !isempty(fig_saved)
+                    @info "Saved per-iteration score-Langevin stats figure" iteration path = fig_saved method = get(cfg, "runtime.current_langevin_method", "")
+                end
+            catch err
+                @warn "Failed to save score-Langevin stats figure" iteration path = score_langevin_fig error = sprint(showerror, err)
+            end
         end
     end
 
@@ -1662,6 +2499,7 @@ function save_convergence_figure(state, cfg, run_dir)
     panels = Vector{Any}(undef, 2 * ncols)
     theta_ref = true_theta_reference(cfg)
     A_target = get(cfg, "runtime.A_target", nothing)
+    obs_names = observable_names(Int(cfg["observables.m"]))
 
     for col in 1:ncols
         if col <= length(free_idx)
@@ -1688,7 +2526,8 @@ function save_convergence_figure(state, cfg, run_dir)
         idx = ncols + col
         if col <= length(active_idx)
             oidx = active_idx[col]
-            pn = plot(; title="$(OBS_NAMES[oidx])", xlabel="iteration", ylabel="observable", legend=(col == 1 ? :best : false))
+            obs_title = oidx <= length(obs_names) ? obs_names[oidx] : "obs_$oidx"
+            pn = plot(; title=obs_title, xlabel="iteration", ylabel="observable", legend=(col == 1 ? :best : false))
             for method in methods
                 style = style_for_method(method)
                 obs_hist = get(state.obs_history, method, Vector{Vector{Float64}}())

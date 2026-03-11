@@ -1,0 +1,317 @@
+[unet]
+min_samples_active_l2 = -1
+reference_full_gap_to_target = 6.050519122884791
+reference_samples_per_trajectory = 50000
+reference_trajectories = 32
+min_samples_max_abs = -1
+min_samples_full_l2 = -1
+criterion_tol = 0.005
+reference_active_gap_to_target = 3.4273529271366576
+
+    [unet.100000]
+    mean_full_l2_error = 5.848182238958608
+    mean_active_l2_error = 3.363455027263976
+    replicates = 6
+    max_active_l2_error = 3.57331580604159
+    max_abs_error = 2.7590804004862752
+    max_full_l2_error = 6.209708991025545
+
+    [unet.50000]
+    mean_full_l2_error = 5.8487684517989225
+    mean_active_l2_error = 3.3638694837678336
+    replicates = 6
+    max_active_l2_error = 3.5733625071363884
+    max_abs_error = 2.75911111254698
+    max_full_l2_error = 6.21081943238338
+
+    [unet.200000]
+    mean_full_l2_error = 5.9679765101770395
+    mean_active_l2_error = 3.432808407792288
+    replicates = 6
+    max_active_l2_error = 3.572561257939969
+    max_abs_error = 2.758197513030027
+    max_full_l2_error = 6.20827278753345
+
+    [unet.100]
+    mean_full_l2_error = 5.670343398285713
+    mean_active_l2_error = 3.266217099905759
+    replicates = 6
+    max_active_l2_error = 3.53625446464694
+    max_abs_error = 2.721346878981243
+    max_full_l2_error = 6.165080949256518
+
+    [unet.50]
+    mean_full_l2_error = 6.430311365575048
+    mean_active_l2_error = 3.9011006464366176
+    replicates = 6
+    max_active_l2_error = 6.659711165860301
+    max_abs_error = 4.388746255602054
+    max_full_l2_error = 9.693570130148165
+
+    [unet.500]
+    mean_full_l2_error = 5.602493523636006
+    mean_active_l2_error = 3.222714659549504
+    replicates = 6
+    max_active_l2_error = 3.5983505662942616
+    max_abs_error = 2.7798571493280058
+    max_full_l2_error = 6.248987681111291
+
+    [unet.2000]
+    mean_full_l2_error = 5.849192327198477
+    mean_active_l2_error = 3.3648052817601037
+    replicates = 6
+    max_active_l2_error = 3.580969183133942
+    max_abs_error = 2.76677365056105
+    max_full_l2_error = 6.22119649922334
+
+    [unet.10000]
+    mean_full_l2_error = 5.731369746068968
+    mean_active_l2_error = 3.294921726931092
+    replicates = 6
+    max_active_l2_error = 3.5736196382845433
+    max_abs_error = 2.759215149358686
+    max_full_l2_error = 6.210687318607148
+
+    [unet.20000]
+    mean_full_l2_error = 5.848365771670669
+    mean_active_l2_error = 3.3636195493272893
+    replicates = 6
+    max_active_l2_error = 3.5727636632704343
+    max_abs_error = 2.758463070202568
+    max_full_l2_error = 6.207866359091972
+
+    [unet.1000]
+    mean_full_l2_error = 6.07433601272075
+    mean_active_l2_error = 3.495307572959634
+    replicates = 6
+    max_active_l2_error = 3.57346903902626
+    max_abs_error = 2.7593750589344936
+    max_full_l2_error = 6.218737285705181
+
+    [unet.5000]
+    mean_full_l2_error = 5.608882823156523
+    mean_active_l2_error = 3.2245090823475153
+    replicates = 6
+    max_active_l2_error = 3.5685205905584816
+    max_abs_error = 2.7536305341206453
+    max_full_l2_error = 6.203079958307503
+
+    [unet.200]
+    mean_full_l2_error = 5.799446285326606
+    mean_active_l2_error = 3.3386911573105524
+    replicates = 6
+    max_active_l2_error = 3.567975085871964
+    max_abs_error = 2.756891125804184
+    max_full_l2_error = 6.199601388530539
+
+[finite_difference]
+min_samples_active_l2 = -1
+reference_full_gap_to_target = 4.810360487855869
+reference_samples_per_trajectory = 50000
+reference_trajectories = 32
+min_samples_max_abs = -1
+min_samples_full_l2 = -1
+criterion_tol = 0.005
+reference_active_gap_to_target = 2.717354901769747
+
+    [finite_difference.100000]
+    mean_full_l2_error = 5.553184758059227
+    mean_active_l2_error = 3.1909990179763756
+    replicates = 6
+    max_active_l2_error = 4.352414038565036
+    max_abs_error = 3.3707469193761375
+    max_full_l2_error = 7.574874433549196
+
+    [finite_difference.50000]
+    mean_full_l2_error = 6.041933850892595
+    mean_active_l2_error = 3.4776439215852157
+    replicates = 6
+    max_active_l2_error = 4.3558628832614
+    max_abs_error = 3.373894283187228
+    max_full_l2_error = 7.58189597796778
+
+    [finite_difference.200000]
+    mean_full_l2_error = 6.060234953369726
+    mean_active_l2_error = 3.481918694861134
+    replicates = 6
+    max_active_l2_error = 4.353356786682954
+    max_abs_error = 3.371514411612821
+    max_full_l2_error = 7.5776937330567025
+
+    [finite_difference.100]
+    mean_full_l2_error = 5.495318021710897
+    mean_active_l2_error = 3.1632191478553615
+    replicates = 6
+    max_active_l2_error = 4.366964361410176
+    max_abs_error = 3.376474245541757
+    max_full_l2_error = 7.579791578767877
+
+    [finite_difference.50]
+    mean_full_l2_error = 6.464248289169764
+    mean_active_l2_error = 3.726521944711216
+    replicates = 6
+    max_active_l2_error = 4.407287032290969
+    max_abs_error = 3.425223817669272
+    max_full_l2_error = 7.663519030592465
+
+    [finite_difference.500]
+    mean_full_l2_error = 7.049533765417895
+    mean_active_l2_error = 4.051360710079304
+    replicates = 6
+    max_active_l2_error = 4.3500580106895175
+    max_abs_error = 3.3714420550918103
+    max_full_l2_error = 7.57784595157097
+
+    [finite_difference.2000]
+    mean_full_l2_error = 5.564928308792784
+    mean_active_l2_error = 3.1980041339729914
+    replicates = 6
+    max_active_l2_error = 4.366761392720258
+    max_abs_error = 3.384876048409199
+    max_full_l2_error = 7.6062467938324545
+
+    [finite_difference.10000]
+    mean_full_l2_error = 6.475645120851671
+    mean_active_l2_error = 3.9477117561310267
+    replicates = 6
+    max_active_l2_error = 5.398633236712227
+    max_abs_error = 3.3752461988751814
+    max_full_l2_error = 7.58291549897439
+
+    [finite_difference.20000]
+    mean_full_l2_error = 6.057198825603891
+    mean_active_l2_error = 3.4801275200659636
+    replicates = 6
+    max_active_l2_error = 4.353162728170807
+    max_abs_error = 3.371424096849442
+    max_full_l2_error = 7.5797268735276155
+
+    [finite_difference.1000]
+    mean_full_l2_error = 5.027724703017422
+    mean_active_l2_error = 2.8918551072192447
+    replicates = 6
+    max_active_l2_error = 4.355059884266441
+    max_abs_error = 3.373728869289499
+    max_full_l2_error = 7.575987632220719
+
+    [finite_difference.5000]
+    mean_full_l2_error = 6.060563592996601
+    mean_active_l2_error = 3.4813796146243043
+    replicates = 6
+    max_active_l2_error = 4.366529163270826
+    max_abs_error = 3.3835889170712106
+    max_full_l2_error = 7.609354365285165
+
+    [finite_difference.200]
+    mean_full_l2_error = 6.498492768792194
+    mean_active_l2_error = 3.7400570802458257
+    replicates = 6
+    max_active_l2_error = 4.333138140923057
+    max_abs_error = 3.354061776650734
+    max_full_l2_error = 7.5347852637293125
+
+[gaussian]
+min_samples_active_l2 = -1
+reference_full_gap_to_target = 4.063150258972591
+reference_samples_per_trajectory = 50000
+reference_trajectories = 32
+min_samples_max_abs = -1
+min_samples_full_l2 = -1
+criterion_tol = 0.005
+reference_active_gap_to_target = 2.2994539201807753
+
+    [gaussian.100000]
+    mean_full_l2_error = 5.161058318293784
+    mean_active_l2_error = 2.9959229863407977
+    replicates = 6
+    max_active_l2_error = 4.710027476214674
+    max_abs_error = 3.568979283484011
+    max_full_l2_error = 8.11507547873928
+
+    [gaussian.50000]
+    mean_full_l2_error = 6.116493522994833
+    mean_active_l2_error = 3.550540357199892
+    replicates = 6
+    max_active_l2_error = 4.717989060584891
+    max_abs_error = 3.5765467699298954
+    max_full_l2_error = 8.128731479904543
+
+    [gaussian.200000]
+    mean_full_l2_error = 3.724440342070364
+    mean_active_l2_error = 2.1623161915896976
+    replicates = 6
+    max_active_l2_error = 4.7063732026651355
+    max_abs_error = 3.5659819427413746
+    max_full_l2_error = 8.10769407082665
+
+    [gaussian.100]
+    mean_full_l2_error = 5.79246072945666
+    mean_active_l2_error = 3.369516739137506
+    replicates = 6
+    max_active_l2_error = 4.713813433353705
+    max_abs_error = 3.5650183915097338
+    max_full_l2_error = 8.13230954930624
+
+    [gaussian.50]
+    mean_full_l2_error = 4.36654514736474
+    mean_active_l2_error = 2.521762602034494
+    replicates = 6
+    max_active_l2_error = 4.806774462025538
+    max_abs_error = 3.6767209307253546
+    max_full_l2_error = 8.389110309596317
+
+    [gaussian.500]
+    mean_full_l2_error = 5.147700619990284
+    mean_active_l2_error = 2.988026528635791
+    replicates = 6
+    max_active_l2_error = 4.7052743501301375
+    max_abs_error = 3.5831558631591065
+    max_full_l2_error = 8.130549626844733
+
+    [gaussian.2000]
+    mean_full_l2_error = 5.149074248732959
+    mean_active_l2_error = 2.987333869307358
+    replicates = 6
+    max_active_l2_error = 4.728838310487645
+    max_abs_error = 3.584584822516695
+    max_full_l2_error = 8.14286070282117
+
+    [gaussian.10000]
+    mean_full_l2_error = 7.3773285764865575
+    mean_active_l2_error = 4.2818302227165965
+    replicates = 6
+    max_active_l2_error = 4.742502280723346
+    max_abs_error = 3.5989077054750647
+    max_full_l2_error = 8.177223508601537
+
+    [gaussian.20000]
+    mean_full_l2_error = 5.895120753688744
+    mean_active_l2_error = 3.4231375322086137
+    replicates = 6
+    max_active_l2_error = 4.7129023761297315
+    max_abs_error = 3.5711176056562017
+    max_full_l2_error = 8.117522443119043
+
+    [gaussian.1000]
+    mean_full_l2_error = 5.115634062409432
+    mean_active_l2_error = 2.9718941973899535
+    replicates = 6
+    max_active_l2_error = 4.74443401227627
+    max_abs_error = 3.5989454929952163
+    max_full_l2_error = 8.188635730612251
+
+    [gaussian.5000]
+    mean_full_l2_error = 5.137371635346427
+    mean_active_l2_error = 2.982929705023762
+    replicates = 6
+    max_active_l2_error = 4.726330761544758
+    max_abs_error = 3.5860075005263563
+    max_full_l2_error = 8.153514733879243
+
+    [gaussian.200]
+    mean_full_l2_error = 5.155428712924889
+    mean_active_l2_error = 2.9992816610193853
+    replicates = 6
+    max_active_l2_error = 4.825601337979932
+    max_abs_error = 3.683282372153597
+    max_full_l2_error = 8.3206890979059

@@ -9,14 +9,6 @@ using TOML
 using Plots
 using Printf
 
-const OBS_NAMES = [
-    "phi1_mean_x",
-    "phi2_mean_x2",
-    "phi3_mean_x_xm1",
-    "phi4_mean_x_xm2",
-    "phi5_mean_x_xm3",
-]
-
 const PARAM_NAMES = ["alpha0", "alpha1", "alpha2", "alpha3", "sigma"]
 
 const PARAM_TITLES_LATEX = [
@@ -27,17 +19,27 @@ const PARAM_TITLES_LATEX = [
     raw"$\sigma$",
 ]
 
-const OBS_TITLES_LATEX = [
-    raw"$\phi_1=\langle X_k \rangle$",
-    raw"$\phi_2=\langle X_k^2 \rangle$",
-    raw"$\phi_3=\langle X_k X_{k-1} \rangle$",
-    raw"$\phi_4=\langle X_k X_{k-2} \rangle$",
-    raw"$\phi_5=\langle X_k X_{k-3} \rangle$",
-]
-
 as_bool(tbl::Dict{String,Any}, key::String, default) = Bool(get(tbl, key, default))
 as_int(tbl::Dict{String,Any}, key::String, default) = Int(get(tbl, key, default))
 as_str(tbl::Dict{String,Any}, key::String, default) = String(get(tbl, key, default))
+
+function observable_names(m::Int)
+    m >= 0 || error("observables.m must be >= 0")
+    out = String["phi1_mean_x", "phi2_mean_x2"]
+    for lag in 1:m
+        push!(out, "phi$(lag + 2)_mean_x_xp$(lag)")
+    end
+    return out
+end
+
+function observable_titles(m::Int)
+    m >= 0 || error("observables.m must be >= 0")
+    out = String[raw"$\phi_1=\langle X_k \rangle$", raw"$\phi_2=\langle X_k^2 \rangle$"]
+    for lag in 1:m
+        push!(out, raw"$\phi_{" * string(lag + 2) * raw"}=\langle X_k X_{k+" * string(lag) * raw"} \rangle$")
+    end
+    return out
+end
 
 function parse_args(args::Vector{String})
     params_path = joinpath(@__DIR__, "parameters_replot_convergence.toml")
@@ -121,7 +123,7 @@ function list_iteration_dirs(run_dir::String)
     return [joinpath(run_dir, d) for d in dirs]
 end
 
-function parse_observables_csv(path::String)
+function parse_observables_csv(path::String, obs_names::Vector{String})
     isfile(path) || error("Missing observables file: $path")
 
     out = Dict{String,Vector{Float64}}()
@@ -132,11 +134,11 @@ function parse_observables_csv(path::String)
             row = split(strip(ln), ",")
             length(row) == 3 || continue
             method, obs_name, val_s = row
-            idx = findfirst(==(obs_name), OBS_NAMES)
+            idx = findfirst(==(obs_name), obs_names)
             idx === nothing && continue
 
             if !haskey(out, method)
-                out[method] = fill(NaN, length(OBS_NAMES))
+                out[method] = fill(NaN, length(obs_names))
             end
             out[method][idx] = parse(Float64, val_s)
         end
@@ -145,21 +147,21 @@ function parse_observables_csv(path::String)
     return out
 end
 
-function load_iter0_observables(run_dir::String)
+function load_iter0_observables(run_dir::String, obs_names::Vector{String})
     path = joinpath(run_dir, "truth", "observables_iter0.csv")
     if !isfile(path)
         return Dict{String,Vector{Float64}}()
     end
-    return parse_observables_csv(path)
+    return parse_observables_csv(path, obs_names)
 end
 
-function load_target_from_truth(run_dir::String)
+function load_target_from_truth(run_dir::String, obs_names::Vector{String})
     path = joinpath(run_dir, "truth", "target_observables.csv")
     if !isfile(path)
         return nothing
     end
 
-    vals = fill(NaN, length(OBS_NAMES))
+    vals = fill(NaN, length(obs_names))
     open(path, "r") do io
         first_line = true
         for ln in eachline(io)
@@ -167,7 +169,7 @@ function load_target_from_truth(run_dir::String)
             row = split(strip(ln), ",")
             length(row) == 2 || continue
             obs_name, val_s = row
-            idx = findfirst(==(obs_name), OBS_NAMES)
+            idx = findfirst(==(obs_name), obs_names)
             idx === nothing && continue
             vals[idx] = parse(Float64, val_s)
         end
@@ -176,7 +178,7 @@ function load_target_from_truth(run_dir::String)
     return vals
 end
 
-function load_histories(run_dir::String, run_cfg::Dict{String,Any}, methods::Vector{String})
+function load_histories(run_dir::String, run_cfg::Dict{String,Any}, methods::Vector{String}, obs_names::Vector{String})
     theta0 = Float64[
         run_cfg["initial_theta"]["alpha0"],
         run_cfg["initial_theta"]["alpha1"],
@@ -188,7 +190,7 @@ function load_histories(run_dir::String, run_cfg::Dict{String,Any}, methods::Vec
     theta_per_method = Dict{String,Vector{Vector{Float64}}}(m => [copy(theta0)] for m in methods)
     obs_history = Dict{String,Vector{Vector{Float64}}}(m => Vector{Vector{Float64}}() for m in methods)
 
-    obs0_tbl = load_iter0_observables(run_dir)
+    obs0_tbl = load_iter0_observables(run_dir, obs_names)
     for method in methods
         if haskey(obs0_tbl, method)
             push!(obs_history[method], copy(obs0_tbl[method]))
@@ -216,7 +218,7 @@ function load_histories(run_dir::String, run_cfg::Dict{String,Any}, methods::Vec
             end
         end
 
-        obs_tbl = parse_observables_csv(obs_path)
+        obs_tbl = parse_observables_csv(obs_path, obs_names)
         for method in methods
             if haskey(obs_tbl, method)
                 push!(obs_history[method], copy(obs_tbl[method]))
@@ -227,7 +229,7 @@ function load_histories(run_dir::String, run_cfg::Dict{String,Any}, methods::Vec
     return theta_per_method, obs_history
 end
 
-function save_replotted_convergence(run_dir::String, output_path::String, methods, free_idx, active_idx, theta_per_method, obs_history, target_obs, dpi::Int, drop_last_n::Int, drop_iteration0_first_row::Bool)
+function save_replotted_convergence(run_dir::String, output_path::String, methods, free_idx, active_idx, theta_per_method, obs_history, target_obs, obs_titles, dpi::Int, drop_last_n::Int, drop_iteration0_first_row::Bool)
     ncols = max(length(free_idx), length(active_idx))
     ncols >= 1 || error("Need at least one free parameter or active observable")
 
@@ -266,7 +268,7 @@ function save_replotted_convergence(run_dir::String, output_path::String, method
         idx = ncols + col
         if col <= length(active_idx)
             oidx = active_idx[col]
-            pn = plot(; title=OBS_TITLES_LATEX[oidx], xlabel="iteration", ylabel="observable", legend=(col == 1 ? :best : false))
+            pn = plot(; title=obs_titles[oidx], xlabel="iteration", ylabel="observable", legend=(col == 1 ? :best : false))
             for method in methods
                 style = style_for_method(method)
                 hist = get(obs_history, method, Vector{Vector{Float64}}())
@@ -320,10 +322,13 @@ function main(args=ARGS)
     run_cfg = TOML.parsefile(run_cfg_path)
 
     methods = enabled_methods(run_cfg, params_cfg)
+    obs_m = haskey(run_cfg, "observables") ? Int(run_cfg["observables"]["m"]) : 3
+    obs_names = observable_names(obs_m)
+    obs_titles = observable_titles(obs_m)
 
     selection = haskey(params_cfg, "selection") ? Dict{String,Any}(params_cfg["selection"]) : Dict{String,Any}()
     free_idx = haskey(selection, "free_parameters") ? normalize_indices(selection["free_parameters"], 5) : normalize_indices(run_cfg["calibration"]["free_parameters"], 5)
-    active_idx = haskey(selection, "active_observables") ? normalize_indices(selection["active_observables"], 5) : normalize_indices(run_cfg["calibration"]["active_observables"], 5)
+    active_idx = haskey(selection, "active_observables") ? normalize_indices(selection["active_observables"], length(obs_names)) : normalize_indices(run_cfg["calibration"]["active_observables"], length(obs_names))
 
     plot_cfg = haskey(params_cfg, "plot") ? Dict{String,Any}(params_cfg["plot"]) : Dict{String,Any}()
     dpi = as_int(plot_cfg, "dpi", haskey(run_cfg, "figures") ? Int(run_cfg["figures"]["dpi"]) : 180)
@@ -339,8 +344,8 @@ function main(args=ARGS)
     output_name = as_str(p, "output_file", "convergence_replot.png")
     output_path = isabspath(output_name) ? output_name : joinpath(run_dir, output_name)
 
-    theta_per_method, obs_history = load_histories(run_dir, run_cfg, methods)
-    target_obs = load_target_from_truth(run_dir)
+    theta_per_method, obs_history = load_histories(run_dir, run_cfg, methods, obs_names)
+    target_obs = load_target_from_truth(run_dir, obs_names)
 
     out = save_replotted_convergence(
         run_dir,
@@ -351,6 +356,7 @@ function main(args=ARGS)
         theta_per_method,
         obs_history,
         target_obs,
+        obs_titles,
         dpi,
         drop_last_n,
         drop_iteration0_first_row,

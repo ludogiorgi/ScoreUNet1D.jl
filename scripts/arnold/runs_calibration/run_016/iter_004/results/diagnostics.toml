@@ -1,0 +1,34 @@
+primary_method_requested = "unet"
+observable_residual_primary = 0.5827503537081198
+primary_method = "unet"
+convergence_metric_primary = 0.68126254502155
+iteration = 4
+inactive_methods = ["finite_difference", "gaussian"]
+theta_primary = [3.879322253934684, 1.303700832155469, -0.21865498617363, 0.011581183127212926, 3.280761707009053]
+
+[per_method.unet]
+gfdt_data_path = "/home/ludogio/Documents/JuliaProjects/ScoreUNet1D.jl/scripts/arnold/runs_calibration/run_016/method_unet/iter_004/data/gfdt_stochastic.hdf5"
+jacobian_cond_active_free = 108401.21345906421
+relative_step = 0.68126254502155
+observable_residual = 0.5827503537081198
+theta_before = [7.313525715552911, 1.7821377344843798, -0.5534959331646603, 0.03397333246884356, 4.090632060873364]
+checkpoint_path = "/home/ludogio/Documents/JuliaProjects/ScoreUNet1D.jl/scripts/arnold/runs_calibration/run_016/method_unet/iter_004/model/final_checkpoint.bson"
+theta_proposed = [3.879322253934684, 1.303700832155469, -0.21865498617363, 0.011581183127212926, 3.280761707009053]
+delta_theta = [3.4342034616182273, 0.47843690232891084, -0.3348409469910303, 0.022392149341630637, 0.8098703538643113]
+train_data_path = "/home/ludogio/Documents/JuliaProjects/ScoreUNet1D.jl/scripts/arnold/runs_calibration/run_016/method_unet/iter_004/data/train_stochastic.hdf5"
+
+    [per_method.unet.newton]
+    raw_cond = 8.282929001014191e9
+    raw_rhs_norm = 1010.6304107545299
+    weight_matrix_mode = "identity"
+    residual_before = 1.0177613320812104
+    stability_accepted = true
+    line_search_accepted = true
+    free_parameters = [1, 2, 3, 4, 5]
+    line_search_scale = 0.5
+    applied_step = [3.4342034616182273, 0.47843690232891084, -0.3348409469910303, 0.022392149341630637, 0.8098703538643113]
+    residual_after = 0.8314661473440548
+    line_search_used = true
+    stability_checked = true
+    active_observables = [1, 2, 3, 4, 5]
+    correction_full = [6.868406923236455, 0.9568738046578217, -0.6696818939820606, 0.044784298683261274, 1.6197407077286226]

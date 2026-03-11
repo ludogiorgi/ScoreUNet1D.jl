@@ -1,0 +1,36 @@
+primary_method_requested = "unet"
+observable_residual_primary = 1.6133560682236867
+primary_method = "unet"
+convergence_metric_primary = 0.1544638964352669
+iteration = 3
+inactive_methods = []
+theta_primary = [1.935797716622598, 1.7844651141633172, -0.1465937829288758, 0.0032649694185696992, 1.7956598241065276]
+
+[per_method.unet]
+relative_step = 0.1544638964352669
+observable_residual = 1.6133560682236867
+observable_residual_unweighted = 1.6133560682236867
+train_data_path = "/home/ludogio/Documents/JuliaProjects/ScoreUNet1D.jl/scripts/arnold/runs_calibration/run_030/method_unet/iter_003/data/train_stochastic.hdf5"
+gfdt_data_path = "/home/ludogio/Documents/JuliaProjects/ScoreUNet1D.jl/scripts/arnold/runs_calibration/run_030/method_unet/iter_003/data/gfdt_stochastic.hdf5"
+jacobian_cond_active_free = 5.217544745288128e6
+checkpoint_path = "/home/ludogio/Documents/JuliaProjects/ScoreUNet1D.jl/scripts/arnold/runs_calibration/run_030/method_unet/iter_003/model/final_checkpoint.bson"
+theta_before = [1.948713743962838, 1.7894129502919929, -0.16514382151077386, 0.004937720136109797, 2.2878877060586236]
+theta_proposed = [1.935797716622598, 1.7844651141633172, -0.1465937829288758, 0.0032649694185696992, 1.7956598241065276]
+delta_theta = [0.012916027340239904, 0.0049478361286756515, -0.01855003858189807, 0.0016727507175400972, 0.492227881952096]
+
+    [per_method.unet.newton]
+    raw_cond = 9.6619726277944e9
+    raw_rhs_norm = 58.73497846699569
+    weight_matrix_mode = "identity"
+    residual_before = 1.4976671355082225
+    stability_accepted = true
+    line_search_accepted = true
+    free_parameters = [1, 2, 3, 4, 5]
+    line_search_scale = 0.125
+    applied_step = [0.012916027340239904, 0.0049478361286756515, -0.01855003858189807, 0.0016727507175400972, 0.492227881952096]
+    residual_before_unweighted = 1.4976671355082225
+    residual_after = 1.4810254927853188
+    line_search_used = true
+    stability_checked = true
+    active_observables = [1, 2, 3, 4, 5]
+    correction_full = [0.10332821872191923, 0.03958268902940521, -0.14840030865518455, 0.013382005740320778, 3.937823055616768]

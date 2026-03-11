@@ -269,6 +269,7 @@ function _stats_first_7_panels(obs::AbstractArray{<:Real,3},
             levels=levels,
             linewidth=2.0,
             color=:dodgerblue3,
+            colorbar=false,
             label=obs_label,
             xlabel="x_k",
             ylabel="x_{k+$lag}",
@@ -282,6 +283,7 @@ function _stats_first_7_panels(obs::AbstractArray{<:Real,3},
             levels=levels,
             linewidth=2.0,
             color=:tomato3,
+            colorbar=false,
             linestyle=:dash,
             label=gen_label,
         )
@@ -345,16 +347,26 @@ function save_stats_figure_acf(path::AbstractString,
     js_mode::Vector{Float64},
     bins::Int;
     max_lag::Int=200,
+    obs_dt::Real=1.0,
+    gen_dt::Real=1.0,
     obs_label::String="Observed",
     gen_label::String="Generated")
     panels = _stats_first_7_panels(obs, gen, kl_mode, js_mode, bins; obs_label=obs_label, gen_label=gen_label)
     acf_obs = average_mode_acf(obs, max_lag)
     acf_gen = average_mode_acf(gen, max_lag)
-    n = min(length(acf_obs), length(acf_gen))
-    n = max(n, 1)
-    lag = 0:(n - 1)
-    p_acf = plot(lag, acf_obs[1:n]; color=:dodgerblue3, linewidth=2, label=obs_label, xlabel="Lag", ylabel="ACF", title="Average ACF over modes")
-    plot!(p_acf, lag, acf_gen[1:n]; color=:tomato3, linewidth=2, linestyle=:dash, label=gen_label)
+    time_obs = Float64(obs_dt) .* collect(0:(length(acf_obs) - 1))
+    time_gen = Float64(gen_dt) .* collect(0:(length(acf_gen) - 1))
+    p_acf = plot(
+        time_obs,
+        acf_obs;
+        color=:dodgerblue3,
+        linewidth=2,
+        label=obs_label,
+        xlabel="Time lag",
+        ylabel="ACF",
+        title="Average ACF over modes",
+    )
+    plot!(p_acf, time_gen, acf_gen; color=:tomato3, linewidth=2, linestyle=:dash, label=gen_label)
     hline!(p_acf, [0.0]; color=:gray40, linestyle=:dot, label="")
     push!(panels, p_acf)
     return _save_4x2(path, panels)

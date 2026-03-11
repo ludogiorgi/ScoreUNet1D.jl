@@ -179,6 +179,17 @@ function main(args=ARGS)
     println("datasets_hdf5=$(cfg["paths.datasets_hdf5"])")
     println("summary=$(abspath(summary_path))")
     println("figB_dataset_compare=$(get(fig_info, "path", ""))")
+    fit_mode = String(get(meta, "mode", "unknown"))
+    fit_role = String(get(meta, "fit_dataset_role", ""))
+    println("closure_parameters_mode=$(fit_mode)")
+    if !isempty(fit_role)
+        println("closure_fit_dataset_role=$(fit_role)")
+    end
+    println("closure_alpha0=$(theta[1])")
+    println("closure_alpha1=$(theta[2])")
+    println("closure_alpha2=$(theta[3])")
+    println("closure_alpha3=$(theta[4])")
+    println("closure_sigma=$(theta[5])")
     for role in roles
         info = result[role]
         println("role=$(role) generated=$(info["generated"]) key=$(info["key"])")

@@ -27,27 +27,31 @@ using Zygote
 include(joinpath(@__DIR__, "lib", "ArnoldCommon.jl"))
 using .ArnoldCommon
 
-const OBS_NAMES = [
-    "phi1_mean_x",
-    "phi2_mean_x2",
-    "phi3_mean_x_xm1",
-    "phi4_mean_x_xm2",
-    "phi5_mean_x_xm3",
-]
-
-const OBS_LABELS = [
-    "phi1=<X_k>",
-    "phi2=<X_k^2>",
-    "phi3=<X_k X_{k-1}>",
-    "phi4=<X_k X_{k-2}>",
-    "phi5=<X_k X_{k-3}>",
-]
-
 const PARAM_NAMES = ["alpha0", "alpha1", "alpha2", "alpha3", "sigma"]
-const N_OBS = length(OBS_NAMES)
 const N_PARAM = length(PARAM_NAMES)
 const ASYMPTOTIC_FD_NSAMPLES = 15_000_000
 const ASYMPTOTIC_FD_SPINUP = 2_000
+
+function observable_names(m::Int)
+    m >= 0 || error("Observable lag parameter m must be >= 0")
+    names = String["phi1_mean_x", "phi2_mean_x2"]
+    for lag in 1:m
+        push!(names, "phi$(lag + 2)_mean_x_xp$(lag)")
+    end
+    return names
+end
+
+function observable_labels(m::Int)
+    m >= 0 || error("Observable lag parameter m must be >= 0")
+    labels = String["phi1=<X_k>", "phi2=<X_k^2>"]
+    for lag in 1:m
+        push!(labels, "phi$(lag + 2)=<X_k X_{k+$(lag)}>")
+    end
+    return labels
+end
+
+observable_count(m::Int) = m + 2
+observable_count_from_cfg(cfg::Dict{String,Any}) = observable_count(Int(get(cfg, "observables.m", 3)))
 
 function parse_args(args::Vector{String})
     params_path = joinpath(@__DIR__, "parameters_responses.toml")
@@ -113,6 +117,7 @@ function load_config(path::AbstractString)
     methods = require_table(doc, "methods")
     gfdt = require_table(doc, "gfdt")
     numerical = require_table(doc, "numerical")
+    observables_tbl = haskey(doc, "observables") ? Dict{String,Any}(doc["observables"]) : Dict{String,Any}()
     figures = haskey(doc, "figures") ? Dict{String,Any}(doc["figures"]) : Dict{String,Any}()
     cache = haskey(doc, "cache") ? Dict{String,Any}(doc["cache"]) : Dict{String,Any}()
 
@@ -127,6 +132,13 @@ function load_config(path::AbstractString)
     obs_alpha1 = data_cfg["closure.alpha1_initial"]
     obs_alpha2 = data_cfg["closure.alpha2_initial"]
     obs_alpha3 = data_cfg["closure.alpha3_initial"]
+    gfdt_response_tmax = as_float(gfdt, "response_tmax", 2.0)
+    gfdt_tail_window = as_float(gfdt, "tail_window", 1.0)
+    gfdt_t_end = as_float(gfdt, "t_end", gfdt_response_tmax)
+    gfdt_t_start = as_float(gfdt, "t_start", max(0.0, gfdt_t_end - gfdt_tail_window))
+    obs_m = as_int(observables_tbl, "m", as_int(gfdt, "m", 3))
+    obs_m >= 0 || error("observables.m must be >= 0")
+    obs_m <= data_cfg["twoscale.K"] - 1 || error("observables.m must be <= K-1")
     dt_obs = dataset_role_spacing(data_cfg, gfdt_role)
     save_every = Int(round(dt_obs / data_cfg["twoscale.dt"]))
     save_every = max(save_every, 1)
@@ -148,8 +160,10 @@ function load_config(path::AbstractString)
         "integration.save_every" => save_every,
         "integration.nsamples" => data_cfg["datasets.$gfdt_role.nsamples"],
         "integration.rng_seed" => data_cfg["datasets.$gfdt_role.rng_seed"],
-        "integration.process_noise_sigma" => data_cfg["twoscale.process_noise_sigma"],
-        "integration.stochastic_x_noise" => data_cfg["twoscale.stochastic_x_noise"], "closure.F" => data_cfg["closure.F"],
+        "integration.process_noise_sigma" => data_cfg["twoscale.process_noise_sigma_y"],
+        "integration.process_noise_sigma_y" => data_cfg["twoscale.process_noise_sigma_y"],
+        "integration.process_noise_sigma_x" => data_cfg["twoscale.process_noise_sigma_x"],
+        "integration.stochastic_x_noise" => data_cfg["twoscale.process_noise_sigma_x"] > 0.0, "closure.F" => data_cfg["closure.F"],
         "closure.alpha0" => closure_theta[1],
         "closure.alpha1" => closure_theta[2],
         "closure.alpha2" => closure_theta[3],
@@ -161,6 +175,8 @@ function load_config(path::AbstractString)
         "observables.alpha1_ref" => obs_alpha1,
         "observables.alpha2_ref" => obs_alpha2,
         "observables.alpha3_ref" => obs_alpha3,
+        "observables.m" => obs_m,
+        "observables.n" => observable_count(obs_m),
         "observables.F_ref" => data_cfg["closure.F"], "methods.gaussian" => as_bool(methods, "gaussian", true),
         "methods.unet" => as_bool(methods, "unet", true),
         "methods.numerical" => as_bool(methods, "numerical", true),
@@ -168,10 +184,14 @@ function load_config(path::AbstractString)
         "methods.response_kind" => lowercase(as_str(methods, "response_kind", "heaviside")), "gfdt.nsamples" => as_int(gfdt, "nsamples", 90_000),
         "gfdt.start_index" => as_int(gfdt, "start_index", 25_001),
         "gfdt.mean_center" => as_bool(gfdt, "mean_center", true),
+        "gfdt.impulse_tail_debias" => as_bool(gfdt, "impulse_tail_debias", false),
+        "gfdt.impulse_tail_taper" => lowercase(as_str(gfdt, "impulse_tail_taper", "linear")),
         "gfdt.batch_size" => as_int(gfdt, "batch_size", 1024),
         "gfdt.score_device" => as_str(gfdt, "score_device", "GPU:1"),
         "gfdt.score_forward_mode" => lowercase(as_str(gfdt, "score_forward_mode", "test")),
-        "gfdt.response_tmax" => as_float(gfdt, "response_tmax", 2.0),
+        "gfdt.response_tmax" => gfdt_response_tmax,
+        "gfdt.t_start" => gfdt_t_start,
+        "gfdt.t_end" => gfdt_t_end,
         "gfdt.output_points" => as_int(gfdt, "output_points", 301),
         "gfdt.divergence_mode" => lowercase(as_str(gfdt, "divergence_mode", "hutchinson")),
         "gfdt.divergence_eps" => as_float(gfdt, "divergence_eps", 0.03),
@@ -191,6 +211,10 @@ function load_config(path::AbstractString)
     cfg["methods.response_kind"] in ("heaviside", "impulse") || error("methods.response_kind must be heaviside or impulse")
     cfg["gfdt.score_forward_mode"] in ("train", "test") || error("gfdt.score_forward_mode must be train or test")
     cfg["gfdt.divergence_mode"] in ("hutchinson", "fd_axis", "exact") || error("gfdt.divergence_mode must be hutchinson, fd_axis, or exact")
+    cfg["gfdt.impulse_tail_taper"] in ("none", "hard", "linear") || error("gfdt.impulse_tail_taper must be one of none|hard|linear")
+    cfg["gfdt.t_start"] >= 0 || error("gfdt.t_start must be >= 0")
+    cfg["gfdt.t_end"] > cfg["gfdt.t_start"] || error("gfdt.t_end must be > gfdt.t_start")
+    cfg["gfdt.t_end"] <= cfg["gfdt.response_tmax"] + 1e-12 || error("gfdt.t_end must be <= gfdt.response_tmax")
     length(cfg["numerical.h_abs"]) == 5 || error("numerical.h_abs must have length 5")
     cfg["numerical.max_abs_state"] > 0.0 || error("numerical.max_abs_state must be > 0")
     0.0 <= cfg["numerical.min_valid_fraction"] <= 1.0 || error("numerical.min_valid_fraction must be in [0,1]")
@@ -693,6 +717,7 @@ function observable_reference(cfg::Dict{String,Any})
         alpha1_ref=cfg["observables.alpha1_ref"],
         alpha2_ref=cfg["observables.alpha2_ref"],
         alpha3_ref=cfg["observables.alpha3_ref"],
+        m=Int(get(cfg, "observables.m", 3)),
     )
 end
 
@@ -704,6 +729,7 @@ function compute_observables_for_matrix(X::Matrix{Float64}, obs_ref)
         obs_ref.alpha1_ref,
         obs_ref.alpha2_ref,
         obs_ref.alpha3_ref,
+        obs_ref.m,
     )
 end
 
@@ -731,6 +757,7 @@ function simulate_observable_series!(
         obs_ref.alpha1_ref,
         obs_ref.alpha2_ref,
         obs_ref.alpha3_ref,
+        obs_ref.m,
     )
     if !all(isfinite, @view(out[:, 1]))
         return false
@@ -752,6 +779,7 @@ function simulate_observable_series!(
             obs_ref.alpha1_ref,
             obs_ref.alpha2_ref,
             obs_ref.alpha3_ref,
+            obs_ref.m,
         )
         if !all(isfinite, @view(out[:, lag+1]))
             return false
@@ -766,6 +794,7 @@ function compute_numerical_responses(
     cfg::Dict{String,Any},
     n_lags::Int)
     K, n_ens = size(init_states)
+    n_obs = observable_count_from_cfg(cfg)
     h_abs = cfg["numerical.h_abs"]
     h_rel = cfg["numerical.h_rel"]
     seed_base = cfg["numerical.seed_base"]
@@ -776,20 +805,20 @@ function compute_numerical_responses(
     h_shrink_factor = cfg["numerical.h_shrink_factor"]
     obs_ref = observable_reference(cfg)
 
-    responses = zeros(Float64, N_OBS, N_PARAM, n_lags + 1)
+    responses = zeros(Float64, n_obs, N_PARAM, n_lags + 1)
     h_used = zeros(Float64, N_PARAM)
     valid_fraction = zeros(Float64, N_PARAM)
     valid_counts = zeros(Int, N_PARAM)
     h_attempts = zeros(Int, N_PARAM)
 
-    partials = [zeros(Float64, N_OBS, n_lags + 1) for _ in 1:nthreads()]
+    partials = [zeros(Float64, n_obs, n_lags + 1) for _ in 1:nthreads()]
     valid_locals = zeros(Int, nthreads())
     workspaces = [
         (
             x0=zeros(Float64, K),
             x=zeros(Float64, K),
-            out_p=zeros(Float64, N_OBS, n_lags + 1),
-            out_m=zeros(Float64, N_OBS, n_lags + 1),
+            out_p=zeros(Float64, n_obs, n_lags + 1),
+            out_m=zeros(Float64, n_obs, n_lags + 1),
             ws=make_reduced_workspace(K),
             rng=MersenneTwister(seed_base + tid),
         ) for tid in 1:nthreads()
@@ -862,7 +891,7 @@ function compute_numerical_responses(
                     end
 
                     valid_locals[tid] += 1
-                    @inbounds for m in 1:N_OBS, lag in 1:(n_lags+1)
+                    @inbounds for m in 1:n_obs, lag in 1:(n_lags+1)
                         part[m, lag] += (wk.out_p[m, lag] - wk.out_m[m, lag]) / (2h)
                     end
                 end
@@ -880,7 +909,7 @@ function compute_numerical_responses(
                 continue
             end
 
-            sum_local = zeros(Float64, N_OBS, n_lags + 1)
+            sum_local = zeros(Float64, n_obs, n_lags + 1)
             for part in partials
                 sum_local .+= part
             end
@@ -926,16 +955,24 @@ function compute_steady_state_observables(theta::NTuple{5,Float64},
     dt = cfg["integration.dt"]
     save_every = cfg["integration.save_every"]
     max_abs_state = cfg["numerical.max_abs_state"]
+    state_min = get(cfg, "numerical.state_min", -Inf)
+    state_max = get(cfg, "numerical.state_max", Inf)
+    max_boundary_hits = Int(get(cfg, "numerical.max_boundary_hits", 40))
+    state_min <= state_max || error("numerical.state_min must be <= numerical.state_max")
+    max_boundary_hits >= 1 || error("numerical.max_boundary_hits must be >= 1")
+    use_bounds = isfinite(state_min) || isfinite(state_max)
     obs_ref = observable_reference(cfg)
+    n_obs = observable_count_from_cfg(cfg)
 
     a0, a1, a2, a3, sig = theta
     rng = MersenneTwister(seed)
     x = zeros(Float64, K)
     ws = make_reduced_workspace(K)
 
-    accum = zeros(Float64, N_OBS)
+    accum = zeros(Float64, n_obs)
     collected = 0
     restarts = 0
+    boundary_hits = 0
     consecutive_restarts = 0
     max_restarts = 10_000
 
@@ -949,6 +986,16 @@ function compute_steady_state_observables(theta::NTuple{5,Float64},
         for _ in 1:spinup
             l96_reduced_step!(x, dt, F, a0, a1, a2, a3, ws)
             add_reduced_noise!(x, rng, sig, dt)
+            if use_bounds
+                if any(v -> (v <= state_min || v >= state_max), x)
+                    boundary_hits += 1
+                    if boundary_hits >= max_boundary_hits
+                        error("Steady-state integration hit bounds [$(state_min), $(state_max)] $(boundary_hits) times (limit=$(max_boundary_hits), seed=$(seed))")
+                    end
+                    stable = false
+                    break
+                end
+            end
             if !(all(isfinite, x) && maximum(abs, x) <= max_abs_state)
                 stable = false
                 break
@@ -968,6 +1015,16 @@ function compute_steady_state_observables(theta::NTuple{5,Float64},
             for _ in 1:save_every
                 l96_reduced_step!(x, dt, F, a0, a1, a2, a3, ws)
                 add_reduced_noise!(x, rng, sig, dt)
+                if use_bounds
+                    if any(v -> (v <= state_min || v >= state_max), x)
+                        boundary_hits += 1
+                        if boundary_hits >= max_boundary_hits
+                            error("Steady-state integration hit bounds [$(state_min), $(state_max)] $(boundary_hits) times (limit=$(max_boundary_hits), seed=$(seed))")
+                        end
+                        stable = false
+                        break
+                    end
+                end
                 if !(all(isfinite, x) && maximum(abs, x) <= max_abs_state)
                     stable = false
                     break
@@ -982,12 +1039,13 @@ function compute_steady_state_observables(theta::NTuple{5,Float64},
                 obs_ref.alpha1_ref,
                 obs_ref.alpha2_ref,
                 obs_ref.alpha3_ref,
+                obs_ref.m,
             )
             if !all(isfinite, obs)
                 stable = false
                 break
             end
-            @inbounds for m in 1:N_OBS
+            @inbounds for m in 1:n_obs
                 accum[m] += obs[m]
             end
             collected += 1
@@ -1021,13 +1079,14 @@ function _is_restart_budget_error(err)
 end
 
 function compute_numerical_jacobians(theta::NTuple{5,Float64}, cfg::Dict{String,Any})
+    n_obs = observable_count_from_cfg(cfg)
     h_abs = cfg["numerical.h_abs"]
     h_rel = cfg["numerical.h_rel"]
     h_shrink_factor = cfg["numerical.h_shrink_factor"]
     max_h_shrinks = cfg["numerical.max_h_shrinks"]
     seed_base = cfg["numerical.seed_base"] + 50_000_000
 
-    J = zeros(Float64, N_OBS, N_PARAM)
+    J = zeros(Float64, n_obs, N_PARAM)
 
     Threads.@threads for ip in 1:N_PARAM
         h = max(h_abs[ip], h_rel * max(abs(theta[ip]), 1.0))
@@ -1083,18 +1142,37 @@ function compute_rmse_summary(R_est::Array{Float64,3}, R_ref::Array{Float64,3})
     return out
 end
 
-function asymptotic_window_indices(times::Vector{Float64}; tail_window::Float64=1.0)
+function asymptotic_window_indices(times::Vector{Float64};
+    t_start::Union{Nothing,Float64}=nothing,
+    t_end::Union{Nothing,Float64}=nothing,
+    tail_window::Union{Nothing,Float64}=1.0)
     isempty(times) && error("times must be non-empty")
-    t_end = times[end]
-    t_start = t_end - max(tail_window, 0.0)
-    idx = findall(t -> t >= t_start && t <= t_end, times)
+    ts = t_start
+    te = t_end
+    if ts === nothing || te === nothing
+        if tail_window === nothing
+            te = times[end]
+            ts = te
+        else
+            te = times[end]
+            ts = te - max(tail_window, 0.0)
+        end
+    end
+    tsv = Float64(ts)
+    tev = Float64(te)
+    tsv >= 0 || error("t_start must be >= 0")
+    tev > tsv || error("t_end must be > t_start")
+    idx = findall(t -> t >= tsv && t <= tev, times)
     isempty(idx) && return [length(times)]
     return idx
 end
 
-function extract_asymptotic_jacobians(times::Vector{Float64}, responses::Array{Float64,3}; tail_window::Float64=1.0)
+function extract_asymptotic_jacobians(times::Vector{Float64}, responses::Array{Float64,3};
+    t_start::Union{Nothing,Float64}=nothing,
+    t_end::Union{Nothing,Float64}=nothing,
+    tail_window::Union{Nothing,Float64}=1.0)
     size(responses, 3) == length(times) || error("Response time dimension mismatch")
-    idx = asymptotic_window_indices(times; tail_window=tail_window)
+    idx = asymptotic_window_indices(times; t_start=t_start, t_end=t_end, tail_window=tail_window)
     return dropdims(mean(@view(responses[:, :, idx]); dims=3), dims=3)
 end
 
@@ -1144,14 +1222,19 @@ function response_signature(cfg::Dict{String,Any})
             "alpha1_ref" => cfg["observables.alpha1_ref"],
             "alpha2_ref" => cfg["observables.alpha2_ref"],
             "alpha3_ref" => cfg["observables.alpha3_ref"],
-            "names" => OBS_NAMES,
-            "n_observables" => N_OBS,
+            "m" => cfg["observables.m"],
+            "names" => observable_names(Int(cfg["observables.m"])),
+            "n_observables" => observable_count_from_cfg(cfg),
         ),
         "gfdt" => Dict(
             "nsamples" => cfg["gfdt.nsamples"],
             "start_index" => cfg["gfdt.start_index"],
             "mean_center" => cfg["gfdt.mean_center"],
+            "impulse_tail_debias" => cfg["gfdt.impulse_tail_debias"],
+            "impulse_tail_taper" => cfg["gfdt.impulse_tail_taper"],
             "response_tmax" => cfg["gfdt.response_tmax"],
+            "t_start" => cfg["gfdt.t_start"],
+            "t_end" => cfg["gfdt.t_end"],
             "output_points" => cfg["gfdt.output_points"],
             "batch_size" => cfg["gfdt.batch_size"],
         ),
@@ -1291,8 +1374,28 @@ function compute_baseline_payload(cfg::Dict{String,Any})
     A = compute_observables_for_matrix(Xgfdt, obs_ref)
     gauss = gaussian_conjugates(Xgfdt, theta[5]; apply_correction=cfg["methods.apply_score_correction"])
 
-    Cg_raw, Rg_raw_step, times_native = build_gfdt_response(A, gauss.G_raw, dt_obs, n_lags; mean_center=cfg["gfdt.mean_center"])
-    Cg_corr, Rg_corr_step, _ = build_gfdt_response(A, gauss.G_corr, dt_obs, n_lags; mean_center=cfg["gfdt.mean_center"])
+    Cg_raw, Rg_raw_step, times_native = build_gfdt_response(
+        A,
+        gauss.G_raw,
+        dt_obs,
+        n_lags;
+        mean_center=cfg["gfdt.mean_center"],
+        impulse_tail_debias=cfg["gfdt.impulse_tail_debias"],
+        t_start=cfg["gfdt.t_start"],
+        t_end=cfg["gfdt.t_end"],
+        tail_taper=cfg["gfdt.impulse_tail_taper"],
+    )
+    Cg_corr, Rg_corr_step, _ = build_gfdt_response(
+        A,
+        gauss.G_corr,
+        dt_obs,
+        n_lags;
+        mean_center=cfg["gfdt.mean_center"],
+        impulse_tail_debias=cfg["gfdt.impulse_tail_debias"],
+        t_start=cfg["gfdt.t_start"],
+        t_end=cfg["gfdt.t_end"],
+        tail_taper=cfg["gfdt.impulse_tail_taper"],
+    )
 
     Xinit = load_x_matrix(
         cfg["paths.dataset_path"],
@@ -1349,7 +1452,9 @@ function save_response_figure(path::AbstractString,
     curves::Vector{NamedTuple};
     asymptotic_curves::Union{Nothing,Vector{NamedTuple}}=nothing,
     title_text::String,
-    dpi::Int)
+    dpi::Int,
+    observable_row_labels::Union{Nothing,Vector{String}}=nothing,
+    figure_size::Union{Nothing,Tuple{Int,Int}}=nothing)
     isempty(curves) && return ""
 
     R0 = curves[1].data
@@ -1377,6 +1482,15 @@ function save_response_figure(path::AbstractString,
         out
     end
 
+    row_labels = if observable_row_labels === nothing
+        observable_labels(max(m - 2, 0))
+    else
+        length(observable_row_labels) == m || error("observable_row_labels length mismatch")
+        String.(observable_row_labels)
+    end
+
+    fig_size = figure_size === nothing ? (max(2600, 520 * p), max(1900, 235 * m + 180)) : figure_size
+
     default(fontfamily="Computer Modern", dpi=dpi, legendfontsize=8, guidefontsize=9, tickfontsize=8, titlefontsize=10)
     panels = Vector{Plots.Plot}(undef, m * p)
 
@@ -1384,7 +1498,7 @@ function save_response_figure(path::AbstractString,
         idx = (i - 1) * p + j
         legend_mode = idx == 1 ? :topright : false
         title_txt = i == 1 ? "d/d" * PARAM_NAMES[j] : ""
-        ylabel_txt = j == 1 ? OBS_LABELS[i] : ""
+        ylabel_txt = (j == 1 && i <= length(row_labels)) ? row_labels[i] : ""
         xlabel_txt = i == m ? "time" : ""
 
         pn = plot(; legend=legend_mode, title=title_txt, ylabel=ylabel_txt, xlabel=xlabel_txt)
@@ -1398,7 +1512,17 @@ function save_response_figure(path::AbstractString,
         panels[idx] = pn
     end
 
-    fig = plot(panels...; layout=(m, p), size=(2550, 1850), left_margin=6Plots.mm, right_margin=6Plots.mm, top_margin=8Plots.mm, bottom_margin=6Plots.mm, plot_title=title_text, plot_titlefontsize=13)
+    fig = plot(
+        panels...;
+        layout=(m, p),
+        size=fig_size,
+        left_margin=6Plots.mm,
+        right_margin=6Plots.mm,
+        top_margin=8Plots.mm,
+        bottom_margin=6Plots.mm,
+        plot_title=title_text,
+        plot_titlefontsize=13,
+    )
     mkpath(dirname(path))
     savefig(fig, path)
     return path
@@ -1441,8 +1565,13 @@ function write_responses_csv(path::AbstractString,
         println(io, "method,observable,param,time,response")
         for name in sort!(collect(keys(responses)))
             R = responses[name]
-            for i in 1:N_OBS, j in 1:N_PARAM, t in eachindex(times)
-                @printf(io, "%s,%s,%s,%.12e,%.12e\n", name, OBS_NAMES[i], PARAM_NAMES[j], times[t], R[i, j, t])
+            n_obs = size(R, 1)
+            n_param = size(R, 2)
+            obs_names = observable_names(max(n_obs - 2, 0))
+            for i in 1:n_obs, j in 1:n_param, t in eachindex(times)
+                obs_name = i <= length(obs_names) ? obs_names[i] : "obs_$i"
+                param_name = j <= length(PARAM_NAMES) ? PARAM_NAMES[j] : "param_$j"
+                @printf(io, "%s,%s,%s,%.12e,%.12e\n", name, obs_name, param_name, times[t], R[i, j, t])
             end
         end
     end
@@ -1468,9 +1597,9 @@ function main(args=ARGS)
 
     out_root = cfg["paths.output_root"]
     mkpath(out_root)
-    run_info = next_run_dir(out_root)
+    run_info = claim_next_run_dir(out_root)
     out_dir = run_info.run_dir
-    mkpath(out_dir)
+    obs_tag = @sprintf("%dx%d", Int(cfg["observables.n"]), N_PARAM)
 
     run_cfg_path = joinpath(out_dir, "parameters_used.toml")
     open(run_cfg_path, "w") do io
@@ -1540,8 +1669,28 @@ function main(args=ARGS)
             divergence_probes=cfg["gfdt.divergence_probes"],
         )
 
-        C_u_raw, R_u_raw_step, times_native = build_gfdt_response(A, unet.G_raw, dt_obs, n_lags; mean_center=cfg["gfdt.mean_center"])
-        C_u_corr, R_u_corr_step, _ = build_gfdt_response(A, unet.G_corr, dt_obs, n_lags; mean_center=cfg["gfdt.mean_center"])
+        C_u_raw, R_u_raw_step, times_native = build_gfdt_response(
+            A,
+            unet.G_raw,
+            dt_obs,
+            n_lags;
+            mean_center=cfg["gfdt.mean_center"],
+            impulse_tail_debias=cfg["gfdt.impulse_tail_debias"],
+            t_start=cfg["gfdt.t_start"],
+            t_end=cfg["gfdt.t_end"],
+            tail_taper=cfg["gfdt.impulse_tail_taper"],
+        )
+        C_u_corr, R_u_corr_step, _ = build_gfdt_response(
+            A,
+            unet.G_corr,
+            dt_obs,
+            n_lags;
+            mean_center=cfg["gfdt.mean_center"],
+            impulse_tail_debias=cfg["gfdt.impulse_tail_debias"],
+            t_start=cfg["gfdt.t_start"],
+            t_end=cfg["gfdt.t_end"],
+            tail_taper=cfg["gfdt.impulse_tail_taper"],
+        )
 
         R_u_raw_step_out = linear_interpolate_3d_time(R_u_raw_step, times_native, times_out)
         R_u_corr_step_out = linear_interpolate_3d_time(R_u_corr_step, times_native, times_out)
@@ -1586,9 +1735,19 @@ function main(args=ARGS)
     if haskey(responses, "numerical_integration")
         if baseline.asymptotic_jacobians === nothing
             if haskey(heaviside_responses, "numerical_integration")
-                jacobian_asymptotes["numerical_integration"] = extract_asymptotic_jacobians(times_out, heaviside_responses["numerical_integration"])
+                jacobian_asymptotes["numerical_integration"] = extract_asymptotic_jacobians(
+                    times_out,
+                    heaviside_responses["numerical_integration"];
+                    t_start=cfg["gfdt.t_start"],
+                    t_end=cfg["gfdt.t_end"],
+                )
             else
-                jacobian_asymptotes["numerical_integration"] = extract_asymptotic_jacobians(times_out, responses["numerical_integration"])
+                jacobian_asymptotes["numerical_integration"] = extract_asymptotic_jacobians(
+                    times_out,
+                    responses["numerical_integration"];
+                    t_start=cfg["gfdt.t_start"],
+                    t_end=cfg["gfdt.t_end"],
+                )
             end
         else
             jacobian_asymptotes["numerical_integration"] = Matrix{Float64}(baseline.asymptotic_jacobians)
@@ -1597,26 +1756,56 @@ function main(args=ARGS)
     if haskey(responses, "gfdt_gaussian")
         gauss_main_key = cfg["methods.apply_score_correction"] ? "gfdt_gaussian_corrected" : "gfdt_gaussian_raw"
         if haskey(heaviside_responses, gauss_main_key)
-            jacobian_asymptotes["gfdt_gaussian"] = extract_asymptotic_jacobians(times_out, heaviside_responses[gauss_main_key])
+            jacobian_asymptotes["gfdt_gaussian"] = extract_asymptotic_jacobians(
+                times_out,
+                heaviside_responses[gauss_main_key];
+                t_start=cfg["gfdt.t_start"],
+                t_end=cfg["gfdt.t_end"],
+            )
         end
     end
     if haskey(responses, "gfdt_gaussian_raw") && haskey(heaviside_responses, "gfdt_gaussian_raw")
-        jacobian_asymptotes["gfdt_gaussian_raw"] = extract_asymptotic_jacobians(times_out, heaviside_responses["gfdt_gaussian_raw"])
+        jacobian_asymptotes["gfdt_gaussian_raw"] = extract_asymptotic_jacobians(
+            times_out,
+            heaviside_responses["gfdt_gaussian_raw"];
+            t_start=cfg["gfdt.t_start"],
+            t_end=cfg["gfdt.t_end"],
+        )
     end
     if haskey(responses, "gfdt_gaussian_corrected") && haskey(heaviside_responses, "gfdt_gaussian_corrected")
-        jacobian_asymptotes["gfdt_gaussian_corrected"] = extract_asymptotic_jacobians(times_out, heaviside_responses["gfdt_gaussian_corrected"])
+        jacobian_asymptotes["gfdt_gaussian_corrected"] = extract_asymptotic_jacobians(
+            times_out,
+            heaviside_responses["gfdt_gaussian_corrected"];
+            t_start=cfg["gfdt.t_start"],
+            t_end=cfg["gfdt.t_end"],
+        )
     end
     if haskey(responses, "gfdt_unet")
         unet_main_key = cfg["methods.apply_score_correction"] ? "gfdt_unet_corrected" : "gfdt_unet_raw"
         if haskey(unet_step_responses, unet_main_key)
-            jacobian_asymptotes["gfdt_unet"] = extract_asymptotic_jacobians(times_out, unet_step_responses[unet_main_key])
+            jacobian_asymptotes["gfdt_unet"] = extract_asymptotic_jacobians(
+                times_out,
+                unet_step_responses[unet_main_key];
+                t_start=cfg["gfdt.t_start"],
+                t_end=cfg["gfdt.t_end"],
+            )
         end
     end
     if haskey(responses, "gfdt_unet_raw") && haskey(unet_step_responses, "gfdt_unet_raw")
-        jacobian_asymptotes["gfdt_unet_raw"] = extract_asymptotic_jacobians(times_out, unet_step_responses["gfdt_unet_raw"])
+        jacobian_asymptotes["gfdt_unet_raw"] = extract_asymptotic_jacobians(
+            times_out,
+            unet_step_responses["gfdt_unet_raw"];
+            t_start=cfg["gfdt.t_start"],
+            t_end=cfg["gfdt.t_end"],
+        )
     end
     if haskey(responses, "gfdt_unet_corrected") && haskey(unet_step_responses, "gfdt_unet_corrected")
-        jacobian_asymptotes["gfdt_unet_corrected"] = extract_asymptotic_jacobians(times_out, unet_step_responses["gfdt_unet_corrected"])
+        jacobian_asymptotes["gfdt_unet_corrected"] = extract_asymptotic_jacobians(
+            times_out,
+            unet_step_responses["gfdt_unet_corrected"];
+            t_start=cfg["gfdt.t_start"],
+            t_end=cfg["gfdt.t_end"],
+        )
     end
 
     jacobian_distance = Dict{String,Float64}()
@@ -1641,7 +1830,7 @@ function main(args=ARGS)
     haskey(responses, "gfdt_unet") && push!(curves, (method_key="gfdt_unet", label="GFDT+UNet", color=:orangered3, linestyle=:solid, data=responses["gfdt_unet"]))
 
     fig_main = save_response_figure(
-        joinpath(out_dir, "responses_5x5_selected_methods.png"),
+        joinpath(out_dir, "responses_$(obs_tag)_selected_methods.png"),
         times_out,
         curves;
         asymptotic_curves=build_asymptotic_curves(curves, jacobian_asymptotes),
@@ -1656,7 +1845,7 @@ function main(args=ARGS)
         haskey(responses, "gfdt_gaussian_raw") && push!(curves_raw, (method_key="gfdt_gaussian_raw", label="GFDT+Gaussian raw", color=:black, linestyle=:dash, data=responses["gfdt_gaussian_raw"]))
         haskey(responses, "gfdt_unet_raw") && push!(curves_raw, (method_key="gfdt_unet_raw", label="GFDT+UNet raw", color=:orangered3, linestyle=:solid, data=responses["gfdt_unet_raw"]))
         fig_raw = save_response_figure(
-            joinpath(out_dir, "responses_5x5_selected_methods_raw.png"),
+            joinpath(out_dir, "responses_$(obs_tag)_selected_methods_raw.png"),
             times_out,
             curves_raw;
             asymptotic_curves=build_asymptotic_curves(curves_raw, jacobian_asymptotes),
@@ -1672,7 +1861,7 @@ function main(args=ARGS)
         haskey(responses, "gfdt_gaussian_corrected") && push!(curves_corr, (method_key="gfdt_gaussian_corrected", label="GFDT+Gaussian corrected", color=:black, linestyle=:dash, data=responses["gfdt_gaussian_corrected"]))
         haskey(responses, "gfdt_unet_corrected") && push!(curves_corr, (method_key="gfdt_unet_corrected", label="GFDT+UNet corrected", color=:orangered3, linestyle=:solid, data=responses["gfdt_unet_corrected"]))
         fig_corr = save_response_figure(
-            joinpath(out_dir, "responses_5x5_selected_methods_corrected.png"),
+            joinpath(out_dir, "responses_$(obs_tag)_selected_methods_corrected.png"),
             times_out,
             curves_corr;
             asymptotic_curves=build_asymptotic_curves(curves_corr, jacobian_asymptotes),
@@ -1681,8 +1870,8 @@ function main(args=ARGS)
         )
     end
 
-    h5_path = write_responses_hdf5(joinpath(out_dir, "responses_5x5_selected_methods.hdf5"), times_out, responses)
-    csv_path = write_responses_csv(joinpath(out_dir, "responses_5x5_selected_methods.csv"), times_out, responses)
+    h5_path = write_responses_hdf5(joinpath(out_dir, "responses_$(obs_tag)_selected_methods.hdf5"), times_out, responses)
+    csv_path = write_responses_csv(joinpath(out_dir, "responses_$(obs_tag)_selected_methods.csv"), times_out, responses)
 
     summary = Dict{String,Any}(
         "run_id" => run_info.run_name,
@@ -1690,6 +1879,10 @@ function main(args=ARGS)
         "checkpoint_path" => checkpoint_path,
         "response_kind" => cfg["methods.response_kind"],
         "apply_score_correction" => cfg["methods.apply_score_correction"],
+        "impulse_tail_debias" => cfg["gfdt.impulse_tail_debias"],
+        "impulse_tail_taper" => cfg["gfdt.impulse_tail_taper"],
+        "t_start" => cfg["gfdt.t_start"],
+        "t_end" => cfg["gfdt.t_end"],
         "cache_path" => cache_info["path"],
         "cache_regenerated" => cache_info["generated"],
         "h_used" => baseline.h_used,
@@ -1725,7 +1918,7 @@ function main(args=ARGS)
         ),
     )
 
-    summary_path = joinpath(out_dir, "responses_5x5_summary.toml")
+    summary_path = joinpath(out_dir, "responses_$(obs_tag)_summary.toml")
     open(summary_path, "w") do io
         TOML.print(io, summary)
     end

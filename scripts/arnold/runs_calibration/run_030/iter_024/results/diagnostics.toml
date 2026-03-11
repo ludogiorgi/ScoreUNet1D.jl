@@ -1,0 +1,36 @@
+primary_method_requested = "unet"
+observable_residual_primary = 1.2453839642846156
+primary_method = "unet"
+convergence_metric_primary = 0.05624408619038799
+iteration = 24
+inactive_methods = []
+theta_primary = [2.4201393154921895, 1.5581538976320872, -0.12004959027084222, 0.00181168244412314, 2.085907910817023]
+
+[per_method.unet]
+relative_step = 0.05624408619038799
+observable_residual = 1.2453839642846156
+observable_residual_unweighted = 1.2453839642846156
+train_data_path = "/home/ludogio/Documents/JuliaProjects/ScoreUNet1D.jl/scripts/arnold/runs_calibration/run_030/method_unet/iter_024/data/train_stochastic.hdf5"
+gfdt_data_path = "/home/ludogio/Documents/JuliaProjects/ScoreUNet1D.jl/scripts/arnold/runs_calibration/run_030/method_unet/iter_024/data/gfdt_stochastic.hdf5"
+jacobian_cond_active_free = 172782.15346601538
+checkpoint_path = "/home/ludogio/Documents/JuliaProjects/ScoreUNet1D.jl/scripts/arnold/runs_calibration/run_030/method_unet/iter_024/model/final_checkpoint.bson"
+theta_before = [2.2308240202976775, 1.564400066130469, -0.10617412190949879, 0.0007837489297303581, 2.1487186190199465]
+theta_proposed = [2.4201393154921895, 1.5581538976320872, -0.12004959027084222, 0.00181168244412314, 2.085907910817023]
+delta_theta = [-0.18931529519451196, 0.006246168498381772, 0.013875468361343424, -0.0010279335143927818, 0.06281070820292388]
+
+    [per_method.unet.newton]
+    raw_cond = 1.246244408405328e10
+    raw_rhs_norm = 5108.040665844611
+    weight_matrix_mode = "identity"
+    residual_before = 1.166626338833366
+    stability_accepted = true
+    line_search_accepted = true
+    free_parameters = [1, 2, 3, 4, 5]
+    line_search_scale = 0.125
+    applied_step = [-0.18931529519451196, 0.006246168498381772, 0.013875468361343424, -0.0010279335143927818, 0.06281070820292388]
+    residual_before_unweighted = 1.166626338833366
+    residual_after = 1.070404240500912
+    line_search_used = true
+    stability_checked = true
+    active_observables = [1, 2, 3, 4, 5]
+    correction_full = [-1.5145223615560957, 0.04996934798705418, 0.11100374689074739, -0.008223468115142255, 0.502485665623391]

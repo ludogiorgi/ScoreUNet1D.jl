@@ -1,0 +1,34 @@
+[fit_meta]
+sigma_floor = 1.0e-8
+dt_obs = 1.0
+fit_start_index_requested = 2
+fit_min_samples = 5000
+fit_start_index_used = 2
+sigma_cap = 12.0
+threads = 36
+fit_samples_used = 20000
+residual_std = 5.930415955937555
+fit_stop_index_used = 20001
+fit_samples_requested = 20000
+sigma_scale = 0.4215
+
+[stability_meta]
+sigma_backoffs_used = 0
+stable = true
+last_error = ""
+sigma_attempts = [2.499670325427679]
+
+[closure_initial_from_fit]
+sigma = 2.499670325427679
+alpha2 = -1.6669105233780666
+alpha1 = 5.6784356240514375
+alpha3 = 0.1585823638410379
+alpha0 = 0.16823761219643096
+
+[closure]
+sigma = 2.499670325427679
+alpha2 = -1.6669105233780666
+alpha1 = 5.6784356240514375
+alpha3 = 0.1585823638410379
+alpha0 = 0.16823761219643096
+F = 10.0

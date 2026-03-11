@@ -1,0 +1,36 @@
+primary_method_requested = "unet"
+observable_residual_primary = 2.013951812781661
+primary_method = "unet"
+convergence_metric_primary = 0.04912856764504755
+iteration = 29
+inactive_methods = []
+theta_primary = [4.310651664455208, 1.6841838180221818, -0.23867556558988012, 0.00835973998094756, 0.35925425606286676]
+
+[per_method.unet]
+relative_step = 0.04912856764504755
+observable_residual = 2.013951812781661
+observable_residual_unweighted = 2.0139518127816607
+train_data_path = "/home/ludogio/Documents/JuliaProjects/ScoreUNet1D.jl/scripts/arnold/runs_calibration/run_030/method_unet/iter_029/data/train_stochastic.hdf5"
+gfdt_data_path = "/home/ludogio/Documents/JuliaProjects/ScoreUNet1D.jl/scripts/arnold/runs_calibration/run_030/method_unet/iter_029/data/gfdt_stochastic.hdf5"
+jacobian_cond_active_free = 4.464608534733055e6
+checkpoint_path = "/home/ludogio/Documents/JuliaProjects/ScoreUNet1D.jl/scripts/arnold/runs_calibration/run_030/method_unet/iter_029/model/final_checkpoint.bson"
+theta_before = [4.1748391691645885, 1.670644792733638, -0.23605561785154522, 0.008467377707878273, 0.5423095879451454]
+theta_proposed = [4.310651664455208, 1.6841838180221818, -0.23867556558988012, 0.00835973998094756, 0.35925425606286676]
+delta_theta = [-0.13581249529061995, -0.013539025288543775, 0.0026199477383349176, 0.00010763772693071189, 0.18305533188227863]
+
+    [per_method.unet.newton]
+    raw_cond = 1.6819394136967812e10
+    raw_rhs_norm = 6768.259931668399
+    weight_matrix_mode = "identity"
+    residual_before = 2.0015551248989274
+    stability_accepted = true
+    line_search_accepted = true
+    free_parameters = [1, 2, 3, 4, 5]
+    line_search_scale = 0.25
+    applied_step = [-0.13581249529061995, -0.013539025288543775, 0.0026199477383349176, 0.00010763772693071189, 0.18305533188227863]
+    residual_before_unweighted = 2.0015551248989274
+    residual_after = 1.812907783569811
+    line_search_used = true
+    stability_checked = true
+    active_observables = [1, 2, 3, 4, 5]
+    correction_full = [-0.5432499811624798, -0.0541561011541751, 0.01047979095333967, 0.00043055090772284755, 0.7322213275291145]

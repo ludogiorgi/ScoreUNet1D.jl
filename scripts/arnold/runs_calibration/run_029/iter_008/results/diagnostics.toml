@@ -1,0 +1,36 @@
+primary_method_requested = "unet"
+observable_residual_primary = 0.07679684956991656
+primary_method = "unet"
+convergence_metric_primary = 0.1653815878036363
+iteration = 8
+inactive_methods = []
+theta_primary = [2.6655676477470607, 1.8299121551301782, -0.1771666626163407, 0.004828125764329882, 2.75]
+
+[per_method.unet]
+relative_step = 0.1653815878036363
+observable_residual = 0.07679684956991656
+observable_residual_unweighted = 0.8339336974053253
+train_data_path = "/home/ludogio/Documents/JuliaProjects/ScoreUNet1D.jl/scripts/arnold/runs_calibration/run_029/method_unet/iter_008/data/train_stochastic.hdf5"
+gfdt_data_path = "/home/ludogio/Documents/JuliaProjects/ScoreUNet1D.jl/scripts/arnold/runs_calibration/run_029/method_unet/iter_008/data/gfdt_stochastic.hdf5"
+jacobian_cond_active_free = 118208.64778930621
+checkpoint_path = "/home/ludogio/Documents/JuliaProjects/ScoreUNet1D.jl/scripts/arnold/runs_calibration/run_029/method_unet/iter_008/model/final_checkpoint.bson"
+theta_before = [1.9652988607053568, 1.8554467574634868, -0.12635577190950892, 0.0009712401317062888, 2.75]
+theta_proposed = [2.6655676477470607, 1.8299121551301782, -0.1771666626163407, 0.004828125764329882, 2.75]
+delta_theta = [-0.7002687870417041, 0.025534602333308617, 0.05081089070683179, -0.0038568856326235933, 0.0]
+
+    [per_method.unet.newton]
+    raw_cond = 2.5588851461807242e8
+    raw_rhs_norm = 0.5882097382962229
+    weight_matrix_mode = "inverse_cov"
+    residual_before = 0.08808747702124453
+    stability_accepted = true
+    line_search_accepted = true
+    free_parameters = [1, 2, 3, 4]
+    line_search_scale = 1.0
+    applied_step = [-0.7002687870417041, 0.025534602333308617, 0.05081089070683179, -0.0038568856326235933, 0.0]
+    residual_before_unweighted = 1.0394388481983938
+    residual_after = 0.08111217709767084
+    line_search_used = true
+    stability_checked = true
+    active_observables = [1, 2, 3, 4]
+    correction_full = [-0.7002687870417041, 0.025534602333308617, 0.05081089070683179, -0.0038568856326235933, 0.0]

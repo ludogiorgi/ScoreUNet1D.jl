@@ -1,0 +1,43 @@
+# Replot UNet response figures from saved calibration iterations.
+#
+# Usage:
+#   julia --threads auto --project=. scripts/arnold/replot_unet_responses_run.jl \
+#       --params scripts/arnold/parameters_replot_unet_responses.toml
+
+[paths]
+# Input folder options:
+# 1) run folder (e.g. scripts/arnold/runs_calibration/run_016)
+#    -> iterate all iter_* under method_unet
+# 2) method_unet folder (e.g. .../run_016/method_unet)
+#    -> iterate all iter_*
+# 3) specific iter folder (e.g. .../run_016/method_unet/iter_003)
+#    -> generate one figure only
+
+target_dir = "scripts/arnold/runs_calibration/run_016/method_unet/iter_001"
+
+# Optional explicit path to calibration config used for defaults.
+# Leave empty to auto-resolve from target run folder.
+calibration_config = ""
+
+# Output subfolder created inside the resolved run folder.
+output_subdir = "unet_responses_replot"
+
+[plot]
+# Response horizon used when building GFDT response curves.
+response_tmax = 5.0
+# Optional asymptotic interval overrides used both for
+# impulse asymptote estimation/correction and Jacobian averaging.
+t_start = 2.0
+t_end = 5.0
+
+# "heaviside" -> step response R(t)
+# "impulse"   -> impulse response dR/dt
+response_kind = "heaviside"
+
+# Optional DPI override. Set <= 0 to keep run config default.
+dpi = -1
+
+[observables]
+# Optional override metadata for documentation consistency.
+# Replot uses the calibration config m when loading each run.
+m = 4

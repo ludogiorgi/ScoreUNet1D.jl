@@ -1,0 +1,9 @@
+iteration = 5
+device = "GPU:0"
+avg_mode_js = 0.003464115651297449
+checkpoint_path = "/home/ludogio/Documents/JuliaProjects/ScoreUNet1D.jl/scripts/arnold/runs_calibration/run_052/method_unet/iter_005/model/final_checkpoint.bson"
+archive_path = "/home/ludogio/Documents/JuliaProjects/ScoreUNet1D.jl/scripts/arnold/runs_calibration/run_052/iter_005/results/score_langevin_samples.hdf5"
+n_use = 6400
+avg_mode_kl = 0.01771597708659213
+train_data_path = "/home/ludogio/Documents/JuliaProjects/ScoreUNet1D.jl/scripts/arnold/runs_calibration/run_052/iter_005/shared/theta_a6cf8719b8b47ec1/iter_005/data/train_stochastic.hdf5"
+figure_path = "/home/ludogio/Documents/JuliaProjects/ScoreUNet1D.jl/scripts/arnold/runs_calibration/run_052/iter_005/figures/figB_train_vs_score_langevin_4x2.png"

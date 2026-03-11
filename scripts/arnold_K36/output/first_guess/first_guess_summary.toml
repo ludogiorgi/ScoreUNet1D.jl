@@ -1,0 +1,75 @@
+figure_figB_4x2 = "/home/ludogio/Documents/JuliaProjects/ScoreUNet1D.jl/scripts/arnold_K36/output/first_guess/figB_stats_deterministic_vs_stochastic_4x2.png"
+parameters_file = "/home/ludogio/Documents/JuliaProjects/ScoreUNet1D.jl/scripts/arnold_K36/parameters_first_guess.toml"
+
+[observations]
+key = "x_two_scale_observed"
+save_every = 200
+N = 30000
+dt_obs = 1.0
+dt = 0.005
+K = 36
+path = "/home/ludogio/Documents/JuliaProjects/ScoreUNet1D.jl/scripts/arnold_K36/data/l96_k36_observations.hdf5"
+
+[metrics]
+compare_samples = 20000
+observable_rmse = 1.4893608227082538
+avg_mode_js = 0.06617318942479944
+avg_mode_kl = 0.25082713888832053
+
+[first_guess]
+sigma = 2.499670325427679
+alpha2 = -1.6669105233780666
+alpha1 = 5.6784356240514375
+alpha3 = 0.1585823638410379
+alpha0 = 0.16823761219643096
+F = 10.0
+
+[fit_meta]
+sigma_floor = 1.0e-8
+dt_obs = 1.0
+fit_start_index_requested = 2
+fit_min_samples = 5000
+fit_start_index_used = 2
+sigma_cap = 12.0
+threads = 36
+fit_samples_used = 20000
+residual_std = 5.930415955937555
+fit_stop_index_used = 20001
+fit_samples_requested = 20000
+sigma_scale = 0.4215
+
+[stability_meta]
+sigma_backoffs_used = 0
+stable = true
+last_error = ""
+sigma_attempts = [2.499670325427679]
+
+[observables.phi3_mean_x_xp1]
+stochastic = 7.039329467899558
+deterministic = 5.665450688476264
+abs_diff = 1.3738787794232934
+
+[observables.phi5_mean_x_xp3]
+stochastic = 5.473088681459898
+deterministic = 3.8282279837846653
+abs_diff = 1.6448606976752327
+
+[observables.phi4_mean_x_xp2]
+stochastic = 4.537731933004485
+deterministic = 2.7668413445129003
+abs_diff = 1.7708905884915849
+
+[observables.phi2_mean_x2]
+stochastic = 10.327057152190452
+deterministic = 8.508056713562441
+abs_diff = 1.8190004386280112
+
+[observables.phi1_mean_x]
+stochastic = 2.54489450363923
+deterministic = 2.31456297377896
+abs_diff = 0.23033152986026995
+
+[reduced_output]
+key = "x_reduced_first_guess"
+nsamples = 40000
+path = "/home/ludogio/Documents/JuliaProjects/ScoreUNet1D.jl/scripts/arnold_K36/output/first_guess/reduced_first_guess.hdf5"
