@@ -1,0 +1,75 @@
+[methods]
+unet = false
+response_methods = ["numerical_integration", "gaussian", "unet", "finite_difference"]
+finite_difference = false
+gaussian = true
+numerical_integration = true
+
+[numerical]
+nsamples = 120000
+init_ensembles = 36
+max_abs_state = 80.0
+state_max = 1.0e300
+min_valid_fraction = 0.8
+ensemble_trajectories = 1200
+thread_chunk_size = 256
+seed_base = 50000000
+state_min = -1.0e300
+max_h_shrinks = 6
+samples_per_trajectory = 6000
+h_abs = [0.05, 0.02, 0.01, 0.002, 0.05]
+parallel_trajectories = true
+max_boundary_hits = 40
+save_every = 200
+h_rel = 0.005
+use_ensemble = true
+spinup = 2000
+h_shrink_factor = 0.5
+
+[run]
+iteration = 1
+theta_from_dataset = [0.14937746851445197, 0.39447150979547196, -0.008426766431124878, -0.0016716747838000485, 1.0359301191171504]
+iteration_name = "iter_001"
+
+[responses]
+batch_size = 1024
+t_end = 5.0
+t_start = 2.0
+impulse_tail_debias = true
+divergence_mode = "hutchinson"
+divergence_eps = 0.03
+impulse_tail_taper = "hard"
+response_tmax = 5.0
+mean_center = true
+response_kind = "heaviside"
+score_forward_mode = "test"
+divergence_probes = 10
+apply_score_correction = true
+score_device = "GPU:0"
+
+[paths]
+target_dir = "/home/ludogio/Documents/JuliaProjects/ScoreUNet1D.jl/scripts/arnold/runs_calibration/run_082"
+output_name = "responses_recomputed"
+gfdt_path = "/home/ludogio/Documents/JuliaProjects/ScoreUNet1D.jl/scripts/arnold/runs_calibration/run_082/saved_response_analysis/iter_001/responses_recomputed/generated_gfdt_stochastic.hdf5"
+calibration_config = "/home/ludogio/Documents/JuliaProjects/ScoreUNet1D.jl/scripts/arnold/runs_calibration/run_082/config/parameters_calibration.toml"
+checkpoint_path = "/home/ludogio/Documents/JuliaProjects/ScoreUNet1D.jl/scripts/arnold/runs_calibration/run_082/method_unet/iter_001/model/final_checkpoint.bson"
+output_subdir = "saved_response_analysis"
+
+[figures]
+dpi = 180
+
+[observables]
+active_names = ["mean_x", "var_x", "skew_x", "kurt_x", "cov_x_lag1"]
+
+[datasets]
+max_abs_state = 10000.0
+max_restarts = 40
+state_max = 1.0e300
+gfdt_rng_seed_base = 3000
+state_min = -1.0e300
+spinup_steps = 50000
+gfdt_ensemble_trajectories = 1
+gfdt_save_every = 2
+max_boundary_hits = 40
+gfdt_parallel_trajectories = true
+gfdt_nsamples = 250000

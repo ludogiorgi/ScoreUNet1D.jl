@@ -1,0 +1,64 @@
+iterations = 1
+converged = false
+convergence_metric = 0.9059095962114802
+free_parameters = [1, 2, 3, 4, 5]
+run_dir = "/home/ludogio/Documents/JuliaProjects/ScoreUNet1D.jl/scripts/arnold/runs_calibration/run_059"
+obs_residual_primary = 7.398736687411304
+active_observables = [1, 2, 3, 4, 5, 6, 8, 10, 14, 20]
+
+[devices]
+responses_score = "GPU:0"
+training = "GPU:0"
+figures_langevin = "GPU:0"
+
+[methods]
+primary = "gaussian"
+unet = false
+convergence_scope = "primary"
+finite_difference = false
+gaussian = true
+
+[final_theta]
+sigma = 6.579455214242325
+alpha2 = 1.6440452860002042
+alpha1 = 6.900689956610464
+alpha3 = -0.2574841864873559
+alpha0 = 3.3358182249723036
+
+[target_observables]
+phi5_mean_x_xp3 = 3.3312220724521615
+phi4_mean_x_xp2 = 0.14259711921480148
+phi14_mean_x_xp12 = 5.490297959579679
+phi19_mean_x_xp17 = 6.1345739350114386
+phi1_mean_x = 2.4749710642824403
+phi8_mean_x_xp6 = 6.601318754756725
+phi11_mean_x_xp9 = 6.866383649934978
+phi7_mean_x_xp5 = 8.997387428716582
+phi18_mean_x_xp16 = 5.983410363031606
+phi12_mean_x_xp10 = 7.108228398639312
+phi16_mean_x_xp14 = 6.120695243880068
+phi20_mean_x_xp18 = 5.8668295115835996
+phi17_mean_x_xp15 = 6.27851620486105
+phi2_mean_x2 = 19.832668125824533
+phi13_mean_x_xp11 = 5.943192647754751
+phi9_mean_x_xp7 = 4.449695260612736
+phi3_mean_x_xp1 = 7.05232037887427
+phi10_mean_x_xp8 = 4.982113148420641
+phi15_mean_x_xp13 = 6.024531214779557
+phi6_mean_x_xp4 = 7.7897192483531255
+
+[run]
+run_id = 59
+run_name = "run_059"
+run_seed_offset = 58000000000
+
+[artifacts]
+history_hdf5 = "/home/ludogio/Documents/JuliaProjects/ScoreUNet1D.jl/scripts/arnold/runs_calibration/run_059/history/calibration_history.hdf5"
+target_observables_csv = "/home/ludogio/Documents/JuliaProjects/ScoreUNet1D.jl/scripts/arnold/runs_calibration/run_059/truth/target_observables.csv"
+observable_gap_csv = "/home/ludogio/Documents/JuliaProjects/ScoreUNet1D.jl/scripts/arnold/runs_calibration/run_059/history/observable_gap_norm.csv"
+observable_gap_figure = "/home/ludogio/Documents/JuliaProjects/ScoreUNet1D.jl/scripts/arnold/runs_calibration/run_059/observable_gap_norm.png"
+method_metrics_csv = "/home/ludogio/Documents/JuliaProjects/ScoreUNet1D.jl/scripts/arnold/runs_calibration/run_059/history/method_iteration_metrics.csv"
+model_evaluations_csv = "/home/ludogio/Documents/JuliaProjects/ScoreUNet1D.jl/scripts/arnold/runs_calibration/run_059/history/model_evaluations.csv"
+convergence_figure = "/home/ludogio/Documents/JuliaProjects/ScoreUNet1D.jl/scripts/arnold/runs_calibration/run_059/convergence.png"
+update_attempts_csv = "/home/ludogio/Documents/JuliaProjects/ScoreUNet1D.jl/scripts/arnold/runs_calibration/run_059/history/update_attempts.csv"
+truth_trajectory_hdf5 = "/home/ludogio/Documents/JuliaProjects/ScoreUNet1D.jl/scripts/arnold/runs_calibration/run_059/truth/truth_trajectory.hdf5"

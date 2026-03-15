@@ -45,31 +45,22 @@ export load_calibration_config,
 
 const PARAM_NAMES = ["alpha0", "alpha1", "alpha2", "alpha3", "sigma"]
 const RUN_OFFSET_SEED_KEYS = (
+    "truth.rng_seed",
     "datasets.train_rng_seed_base",
+    "datasets.gfdt_rng_seed_base",
     "training.seed",
+    "responses.finite_difference.seed_base",
+    "acceptance.seed_base",
+    "observables_ensemble.seed_base",
     "figures.langevin_seed_base",
 )
 
-function observable_names(m::Int)
-    m >= 0 || error("Observable lag parameter m must be >= 0")
-    out = String["phi1_mean_x", "phi2_mean_x2"]
-    for lag in 1:m
-        push!(out, "phi$(lag + 2)_mean_x_xp$(lag)")
-    end
-    return out
-end
-
-function observable_labels(m::Int)
-    m >= 0 || error("Observable lag parameter m must be >= 0")
-    out = String["phi1=<X_k>", "phi2=<X_k^2>"]
-    for lag in 1:m
-        push!(out, "phi$(lag + 2)=<X_k X_{k+$(lag)}>")
-    end
-    return out
-end
-
-observable_count(m::Int) = m + 2
-observable_count(cfg::Dict{String,Any}) = Int(get(cfg, "observables.n", observable_count(Int(get(cfg, "observables.m", 3)))))
+observable_names(m::Int) = ArnoldCommon.legacy_observable_names(m)
+observable_labels(m::Int) = ArnoldCommon.legacy_observable_labels(m)
+observable_names(cfg::Dict{String,Any}) = copy(String.(get(cfg, "observables.names", observable_names(Int(get(cfg, "observables.m", 3))))))
+observable_labels(cfg::Dict{String,Any}) = copy(String.(get(cfg, "observables.labels", observable_labels(Int(get(cfg, "observables.m", 3))))))
+observable_count(m::Int) = length(observable_names(m))
+observable_count(cfg::Dict{String,Any}) = Int(get(cfg, "observables.n", length(observable_names(cfg))))
 
 Base.@kwdef mutable struct CalibrationState
     iteration::Int = 0
@@ -88,6 +79,84 @@ as_str(tbl::Dict{String,Any}, key::String, default) = String(get(tbl, key, defau
 as_bool(tbl::Dict{String,Any}, key::String, default) = ArnoldCommon.parse_bool(get(tbl, key, default))
 as_int_vec(tbl::Dict{String,Any}, key::String, default) = Int.(collect(get(tbl, key, default)))
 as_float_vec(tbl::Dict{String,Any}, key::String, default) = Float64.(collect(get(tbl, key, default)))
+as_str_vec(tbl::Dict{String,Any}, key::String, default) = String.(collect(get(tbl, key, default)))
+
+function audit_timestamp()
+    return Dates.format(now(), dateformat"yyyy-mm-ddTHH:MM:SS.s")
+end
+
+function theta_snapshot(theta)
+    theta isa AbstractVector || return Float64[]
+    return Float64.(collect(theta))
+end
+
+function append_audit_record!(cfg::Dict{String,Any}, bucket_key::String, counter_key::String, record::Dict{String,Any})
+    bucket = get(cfg, bucket_key, nothing)
+    bucket isa Vector{Dict{String,Any}} || return record
+    next_id = Int(get(cfg, counter_key, 0)) + 1
+    cfg[counter_key] = next_id
+    row = copy(record)
+    row["id"] = next_id
+    row["timestamp"] = get(row, "timestamp", audit_timestamp())
+    row["iteration"] = Int(get(row, "iteration", get(cfg, "runtime.iteration", 0)))
+    row["method"] = String(get(row, "method", get(cfg, "runtime.current_method", "")))
+    push!(bucket, row)
+    return row
+end
+
+function record_model_evaluation!(cfg::Dict{String,Any};
+    category::AbstractString,
+    count::Integer=1,
+    phase::AbstractString="",
+    theta=nothing,
+    status::AbstractString="completed",
+    details=Dict{String,Any}())
+    record = Dict{String,Any}(
+        "category" => String(category),
+        "phase" => String(phase),
+        "count" => Int(count),
+        "status" => String(status),
+    )
+    theta === nothing || (record["theta"] = theta_snapshot(theta))
+    for (k, v) in details
+        record[String(k)] = v
+    end
+    return append_audit_record!(cfg, "runtime.model_evaluation_records", "runtime.model_evaluation_counter", record)
+end
+
+function record_update_attempt!(cfg::Dict{String,Any};
+    phase::AbstractString,
+    theta_before,
+    theta_trial,
+    correction_raw,
+    applied_step,
+    scale::Real,
+    residual_before::Real,
+    residual_after::Real,
+    improved::Bool,
+    accepted::Bool,
+    reason::AbstractString,
+    trial_index::Integer,
+    details=Dict{String,Any}())
+    record = Dict{String,Any}(
+        "phase" => String(phase),
+        "theta_before" => theta_snapshot(theta_before),
+        "theta_trial" => theta_snapshot(theta_trial),
+        "correction_raw" => theta_snapshot(correction_raw),
+        "applied_step" => theta_snapshot(applied_step),
+        "scale" => Float64(scale),
+        "residual_before" => Float64(residual_before),
+        "residual_after" => Float64(residual_after),
+        "improved" => Bool(improved),
+        "accepted" => Bool(accepted),
+        "reason" => String(reason),
+        "trial_index" => Int(trial_index),
+    )
+    for (k, v) in details
+        record[String(k)] = v
+    end
+    return append_audit_record!(cfg, "runtime.update_attempt_records", "runtime.update_attempt_counter", record)
+end
 
 function _device_override(env_key::AbstractString, default::AbstractString)
     value = strip(get(ENV, String(env_key), ""))
@@ -175,6 +244,15 @@ end
 
 function enabled_methods(cfg::Dict{String,Any})
     return [m for m in method_order() if get(cfg, "methods.$m", false)]
+end
+
+function response_figure_allowed_methods()
+    return ("unet", "gaussian", "finite_difference", "numerical_integration")
+end
+
+function response_figure_methods(cfg::Dict{String,Any})
+    methods = get(cfg, "figures.response_methods", ["numerical_integration", "gaussian", "unet"])
+    return String.(methods)
 end
 
 function obs_ref_tuple(cfg::Dict{String,Any})
@@ -486,6 +564,11 @@ function load_calibration_config(path::String)
     obs_m = as_int(observables, "m", as_int(responses_observables_tbl, "m", as_int(responses_gfdt_tbl, "m", 3)))
     obs_m >= 0 || error("observables.m must be >= 0")
     obs_m <= twoscale_K - 1 || error("observables.m must be <= K-1")
+    obs_names_raw = as_str_vec(observables, "names", String[])
+    obs_names = isempty(obs_names_raw) ? ArnoldCommon.legacy_observable_names(obs_m) : obs_names_raw
+    obs_specs = ArnoldCommon.observable_specs_from_names(obs_names, twoscale_K)
+    obs_names = ArnoldCommon.observable_names_from_specs(obs_specs)
+    obs_labels = ArnoldCommon.observable_labels_from_specs(obs_specs)
 
     cfg = Dict{String,Any}(
         "paths.params_file" => abspath(path),
@@ -528,7 +611,10 @@ function load_calibration_config(path::String)
         "observables.alpha2_ref" => closure_alpha2_initial,
         "observables.alpha3_ref" => closure_alpha3_initial,
         "observables.m" => obs_m,
-        "observables.n" => observable_count(obs_m),
+        "observables.names" => obs_names,
+        "observables.labels" => obs_labels,
+        "observables.specs" => obs_specs,
+        "observables.n" => length(obs_names),
 
         "truth.source" => lowercase(as_str(truth, "source", "two_scale")),
         "truth.nsamples" => as_int(truth, "nsamples", 200_000),
@@ -549,6 +635,12 @@ function load_calibration_config(path::String)
         "calibration.tol_theta" => as_float(calibration, "tol_theta", 1e-5),
         "calibration.tol_obs" => as_float(calibration, "tol_obs", 1e-4),
         "calibration.damping" => as_float(calibration, "damping", 1.0),
+        "calibration.damping.unet" => as_float(calibration, "damping_unet", as_float(calibration, "damping", 1.0)),
+        "calibration.damping.gaussian" => as_float(calibration, "damping_gaussian", as_float(calibration, "damping", 1.0)),
+        "calibration.damping.finite_difference" => as_float(calibration, "damping_finite_difference", as_float(calibration, "damping", 1.0)),
+        "calibration.require_improving_update" => as_bool(calibration, "require_improving_update", true),
+        "calibration.backtracking_scales" => as_float_vec(calibration, "backtracking_scales", [1.0, 0.5, 0.25]),
+        "calibration.retry_divergent_update" => as_bool(calibration, "retry_divergent_update", false),
         "calibration.line_search" => as_bool(calibration, "line_search", true),
         "calibration.line_search_max" => as_int(calibration, "line_search_max", 5),
         "calibration.regularization_gamma" => as_float(calibration, "regularization_gamma", 1e-4),
@@ -563,6 +655,7 @@ function load_calibration_config(path::String)
         "calibration.convergence_scope" => lowercase(as_str(calibration, "convergence_scope", "primary")),
         "calibration.weight_matrix" => lowercase(as_str(calibration, "weight_matrix", "identity")),
         "calibration.apply_sigma_jacobian_mask" => as_bool(calibration, "apply_sigma_jacobian_mask", true),
+        "calibration.use_gaussian_sigma_jacobian" => as_bool(calibration, "use_gaussian_sigma_jacobian", false),
         "calibration.freeze_parameters" => as_int_vec(calibration, "freeze_parameters", Int[]),
         "calibration.freeze_steps" => as_int(calibration, "freeze_steps", 0),
 
@@ -585,23 +678,29 @@ function load_calibration_config(path::String)
         "training.device" => as_str(training, "device", as_str(train_tbl, "device", "GPU:0")),
         "training.epochs" => as_int(training, "epochs", as_int(train_tbl, "epochs", 80)),
         "training.resume_from_previous" => as_bool(training, "resume_from_previous", true),
-
-        "training.seed" => as_int(train_tbl, "seed", 42),
-        "training.batch_size" => as_int(train_tbl, "batch_size", 512),
-        "training.lr" => as_float(train_tbl, "lr", 8e-4),
-        "training.sigma" => Float32(as_float(train_tbl, "sigma", 0.05)),
-        "training.base_channels" => as_int(train_tbl, "base_channels", 32),
-        "training.channel_multipliers" => as_int_vec(train_tbl, "channel_multipliers", [1, 2]),
-        "training.norm_type" => lowercase(as_str(train_tbl, "norm_type", "group")),
-        "training.norm_groups" => as_int(train_tbl, "norm_groups", 8),
-        "training.normalization_mode" => lowercase(as_str(train_tbl, "normalization_mode", "per_channel")),
-        "training.use_lr_schedule" => as_bool(train_tbl, "use_lr_schedule", true),
-        "training.warmup_steps" => as_int(train_tbl, "warmup_steps", 500),
-        "training.min_lr_factor" => as_float(train_tbl, "min_lr_factor", 0.1),
-        "training.checkpoint_every" => as_int(train_tbl, "checkpoint_every", 10),
-        "training.loss_weight" => Float32(as_float(train_tbl, "loss_weight", 1.0)),
-        "training.loss_mean_weight" => Float32(as_float(train_tbl, "loss_mean_weight", 0.0)),
-        "training.loss_cov_weight" => Float32(as_float(train_tbl, "loss_cov_weight", 0.0)),
+        "training.seed" => as_int(training, "seed", as_int(train_tbl, "seed", 42)),
+        "training.batch_size" => as_int(training, "batch_size", as_int(train_tbl, "batch_size", 512)),
+        "training.lr" => as_float(training, "lr", as_float(train_tbl, "lr", 8e-4)),
+        "training.sigma" => Float32(as_float(training, "sigma", as_float(train_tbl, "sigma", 0.05))),
+        "training.base_channels" => as_int(training, "base_channels", as_int(train_tbl, "base_channels", 32)),
+        "training.channel_multipliers" => as_int_vec(training, "channel_multipliers", as_int_vec(train_tbl, "channel_multipliers", [1, 2])),
+        "training.kernel_size" => as_int(training, "kernel_size", 5),
+        "training.periodic" => as_bool(training, "periodic", true),
+        "training.norm_type" => lowercase(as_str(training, "norm_type", as_str(train_tbl, "norm_type", "group"))),
+        "training.norm_groups" => as_int(training, "norm_groups", as_int(train_tbl, "norm_groups", 8)),
+        "training.normalization_mode" => lowercase(as_str(training, "normalization_mode", as_str(train_tbl, "normalization_mode", "per_channel"))),
+        "training.shuffle" => as_bool(training, "shuffle", as_bool(train_tbl, "shuffle", true)),
+        "training.progress" => as_bool(training, "progress", as_bool(train_tbl, "progress", false)),
+        "training.max_steps_per_epoch" => as_int(training, "max_steps_per_epoch", as_int(train_tbl, "max_steps_per_epoch", 0)),
+        "training.accumulation_steps" => as_int(training, "accumulation_steps", as_int(train_tbl, "accumulation_steps", 1)),
+        "training.epoch_subset_size" => as_int(training, "epoch_subset_size", as_int(train_tbl, "epoch_subset_size", 0)),
+        "training.use_lr_schedule" => as_bool(training, "use_lr_schedule", as_bool(train_tbl, "use_lr_schedule", true)),
+        "training.warmup_steps" => as_int(training, "warmup_steps", as_int(train_tbl, "warmup_steps", 500)),
+        "training.min_lr_factor" => as_float(training, "min_lr_factor", as_float(train_tbl, "min_lr_factor", 0.1)),
+        "training.checkpoint_every" => as_int(training, "checkpoint_every", as_int(train_tbl, "checkpoint_every", 10)),
+        "training.loss_weight" => Float32(as_float(training, "loss_weight", as_float(train_tbl, "loss_weight", 1.0))),
+        "training.loss_mean_weight" => Float32(as_float(training, "loss_mean_weight", as_float(train_tbl, "loss_mean_weight", 0.0))),
+        "training.loss_cov_weight" => Float32(as_float(training, "loss_cov_weight", as_float(train_tbl, "loss_cov_weight", 0.0))),
 
         "responses.response_tmax" => responses_tmax,
         "responses.mean_center" => as_bool(responses, "mean_center", true),
@@ -662,6 +761,7 @@ function load_calibration_config(path::String)
         "figures.save_per_iteration" => as_bool(figures, "save_per_iteration", true),
         "figures.save_convergence" => as_bool(figures, "save_convergence", true),
         "figures.save_langevin_stats" => as_bool(figures, "save_langevin_stats", true),
+        "figures.response_methods" => lowercase.(as_str_vec(figures, "response_methods", ["numerical_integration", "gaussian", "unet"])),
         "figures.langevin_device" => as_str(figures, "langevin_device", as_str(responses, "score_device", as_str(responses_gfdt_tbl, "score_device", "CPU"))),
         "figures.langevin_dt" => as_float(figures, "langevin_dt", twoscale_dt),
         "figures.langevin_resolution" => as_int(figures, "langevin_resolution", as_int(datasets, "train_save_every", data_cfg["datasets.train_stochastic.save_every"])),
@@ -685,7 +785,15 @@ function load_calibration_config(path::String)
     )
 
     cfg["calibration.free_parameters"] = normalize_indices(as_int_vec(calibration, "free_parameters", Int[]), 5, "calibration.free_parameters")
-    cfg["calibration.active_observables"] = normalize_indices(as_int_vec(calibration, "active_observables", Int[]), cfg["observables.n"], "calibration.active_observables")
+    active_obs_names = as_str_vec(calibration, "active_observable_names", String[])
+    if !isempty(active_obs_names)
+        obs_name_to_idx = Dict(name => idx for (idx, name) in enumerate(obs_names))
+        missing_names = [name for name in active_obs_names if !haskey(obs_name_to_idx, name)]
+        isempty(missing_names) || error("Unknown calibration.active_observable_names entries: $(join(missing_names, ", "))")
+        cfg["calibration.active_observables"] = [obs_name_to_idx[name] for name in active_obs_names]
+    else
+        cfg["calibration.active_observables"] = normalize_indices(as_int_vec(calibration, "active_observables", Int[]), cfg["observables.n"], "calibration.active_observables")
+    end
     freeze_params_raw = collect(get(calibration, "freeze_parameters", Int[]))
     cfg["calibration.freeze_parameters"] = isempty(freeze_params_raw) ? Int[] : normalize_indices(
         Int.(freeze_params_raw),
@@ -717,6 +825,11 @@ function load_calibration_config(path::String)
     cfg["calibration.tol_theta"] > 0 || error("calibration.tol_theta must be > 0")
     cfg["calibration.tol_obs"] > 0 || error("calibration.tol_obs must be > 0")
     cfg["calibration.damping"] > 0 || error("calibration.damping must be > 0")
+    cfg["calibration.damping.unet"] > 0 || error("calibration.damping.unet must be > 0")
+    cfg["calibration.damping.gaussian"] > 0 || error("calibration.damping.gaussian must be > 0")
+    cfg["calibration.damping.finite_difference"] > 0 || error("calibration.damping.finite_difference must be > 0")
+    !isempty(cfg["calibration.backtracking_scales"]) || error("calibration.backtracking_scales must not be empty")
+    all(s -> s > 0, cfg["calibration.backtracking_scales"]) || error("calibration.backtracking_scales must contain only positive values")
     cfg["calibration.line_search_max"] >= 0 || error("calibration.line_search_max must be >= 0")
     cfg["calibration.regularization_gamma"] >= 0 || error("calibration.regularization_gamma must be >= 0")
     cfg["calibration.lm_max_attempts"] >= 1 || error("calibration.lm_max_attempts must be >= 1")
@@ -742,6 +855,10 @@ function load_calibration_config(path::String)
     cfg["integration.dt"] > 0 || error("twoscale.dt must be > 0")
 
     !isempty(enabled_methods(cfg)) || error("At least one Jacobian method must be enabled")
+    if cfg["calibration.use_gaussian_sigma_jacobian"]
+        cfg["methods.unet"] || error("calibration.use_gaussian_sigma_jacobian requires methods.unet = true")
+        cfg["methods.gaussian"] || error("calibration.use_gaussian_sigma_jacobian requires methods.gaussian = true")
+    end
 
     cfg["datasets.train_nsamples"] >= 2 || error("datasets.train_nsamples must be >= 2")
     cfg["datasets.train_ensemble_trajectories"] >= 1 || error("datasets.train_ensemble_trajectories must be >= 1")
@@ -751,8 +868,22 @@ function load_calibration_config(path::String)
 
     cfg["training.epochs"] >= 1 || error("training.epochs must be >= 1")
     cfg["training.batch_size"] >= 1 || error("training.batch_size must be >= 1")
+    cfg["training.lr"] > 0 || error("training.lr must be > 0")
+    cfg["training.sigma"] > 0 || error("training.sigma must be > 0")
+    cfg["training.base_channels"] >= 1 || error("training.base_channels must be >= 1")
+    cfg["training.kernel_size"] >= 1 || error("training.kernel_size must be >= 1")
+    cfg["training.accumulation_steps"] >= 1 || error("training.accumulation_steps must be >= 1")
+    cfg["training.max_steps_per_epoch"] >= 0 || error("training.max_steps_per_epoch must be >= 0")
+    cfg["training.epoch_subset_size"] >= 0 || error("training.epoch_subset_size must be >= 0")
+    !isempty(cfg["training.channel_multipliers"]) || error("training.channel_multipliers must not be empty")
+    all(>(0), cfg["training.channel_multipliers"]) || error("training.channel_multipliers entries must be > 0")
     cfg["training.norm_type"] in ("batch", "group") || error("training.norm_type must be batch or group")
     cfg["training.checkpoint_every"] >= 0 || error("training.checkpoint_every must be >= 0")
+
+    allowed_response_methods = Set(response_figure_allowed_methods())
+    response_methods = response_figure_methods(cfg)
+    allowed_response_methods_str = join(sort!(collect(allowed_response_methods)), ", ")
+    isempty(response_methods) || all(m -> m in allowed_response_methods, response_methods) || error("figures.response_methods must be chosen from $allowed_response_methods_str")
 
     cfg["responses.response_tmax"] > 0 || error("responses.response_tmax must be > 0")
     cfg["responses.divergence_mode"] in ("hutchinson", "fd_axis", "exact") || error("responses.divergence_mode must be one of hutchinson|fd_axis|exact")
@@ -824,6 +955,10 @@ function load_calibration_config(path::String)
     cfg["runtime.run_name"] = ""
     cfg["runtime.run_seed_offset"] = 0
     cfg["runtime.run_seed_offset_applied"] = false
+    cfg["runtime.model_evaluation_counter"] = 0
+    cfg["runtime.model_evaluation_records"] = Vector{Dict{String,Any}}()
+    cfg["runtime.update_attempt_counter"] = 0
+    cfg["runtime.update_attempt_records"] = Vector{Dict{String,Any}}()
 
     return cfg
 end
@@ -1052,7 +1187,7 @@ function maybe_save_truth_artifacts!(cfg::Dict{String,Any}, X::Matrix{Float64}, 
 
     mkpath(truth_dir)
     target_csv = joinpath(truth_dir, "target_observables.csv")
-    write_vector_csv(target_csv, observable_names(Int(cfg["observables.m"])), A_target)
+    write_vector_csv(target_csv, observable_names(cfg), A_target)
 
     traj_path = joinpath(truth_dir, "truth_trajectory.hdf5")
     attrs = Dict{String,Any}(
@@ -1068,7 +1203,6 @@ end
 function compute_target_observables(cfg::Dict)
     obs_ref = obs_ref_tuple(cfg)
     K = cfg["integration.K"]
-    obs_m = Int(cfg["observables.m"])
 
     X = if cfg["truth.source"] == "two_scale"
         # Reuse cached Arnold dataset when signatures already match; this avoids
@@ -1093,7 +1227,7 @@ function compute_target_observables(cfg::Dict)
         obs_ref.alpha1_ref,
         obs_ref.alpha2_ref,
         obs_ref.alpha3_ref,
-        obs_m,
+        cfg["observables.specs"],
     )
     A_target = vec(mean(A; dims=2))
     all(isfinite, A_target) || error("Target observables contain non-finite values")
@@ -1137,6 +1271,19 @@ function generate_iteration_datasets(cfg::Dict, theta::NTuple{5,Float64}, iterat
         state_min=cfg["numerical.state_min"],
         state_max=cfg["numerical.state_max"],
         max_boundary_hits=cfg["numerical.max_boundary_hits"],
+    )
+    record_model_evaluation!(
+        cfg;
+        category="dataset_generation",
+        count=1,
+        phase="gfdt_dataset",
+        theta=collect(theta),
+        details=Dict(
+            "nsamples" => cfg["datasets.gfdt_nsamples"],
+            "save_every" => cfg["datasets.gfdt_save_every"],
+            "spinup_steps" => cfg["datasets.spinup_steps"],
+            "rng_seed" => gfdt_seed,
+        ),
     )
 
     train_path = ""
@@ -1240,6 +1387,21 @@ function generate_iteration_datasets(cfg::Dict, theta::NTuple{5,Float64}, iterat
         attrs_train["parallel_trajectories"] = train_parallel
         attrs_train["role"] = "train_stochastic"
         ArnoldCommon.save_x_dataset(train_path, cfg["datasets.train_key"], train_data, attrs_train)
+        record_model_evaluation!(
+            cfg;
+            category="dataset_generation",
+            count=train_ntraj,
+            phase="train_dataset",
+            theta=collect(theta),
+            details=Dict(
+                "nsamples" => cfg["datasets.train_nsamples"],
+                "save_every" => cfg["datasets.train_save_every"],
+                "spinup_steps" => cfg["datasets.spinup_steps"],
+                "rng_seed" => train_seed,
+                "ensemble_trajectories" => train_ntraj,
+                "parallel_trajectories" => train_parallel,
+            ),
+        )
     end
 
     ArnoldCommon.save_x_dataset(gfdt_path, cfg["datasets.gfdt_key"], gfdt_data, attrs_gfdt)
@@ -1264,8 +1426,8 @@ function train_iteration_score(cfg::Dict, train_data_path::String, iteration::In
         out_channels=1,
         base_channels=cfg["training.base_channels"],
         channel_multipliers=parse_channel_multipliers(cfg["training.channel_multipliers"]),
-        kernel_size=5,
-        periodic=true,
+        kernel_size=cfg["training.kernel_size"],
+        periodic=cfg["training.periodic"],
         norm_type=parse_norm_type(cfg["training.norm_type"]),
         norm_groups=cfg["training.norm_groups"],
     )
@@ -1286,11 +1448,15 @@ function train_iteration_score(cfg::Dict, train_data_path::String, iteration::In
         epochs=cfg["training.epochs"],
         lr=cfg["training.lr"],
         sigma=cfg["training.sigma"],
+        shuffle=cfg["training.shuffle"],
         seed=cfg["training.seed"] + iteration,
-        progress=false,
+        progress=cfg["training.progress"],
+        max_steps_per_epoch=cfg["training.max_steps_per_epoch"] > 0 ? cfg["training.max_steps_per_epoch"] : nothing,
+        accumulation_steps=cfg["training.accumulation_steps"],
         use_lr_schedule=cfg["training.use_lr_schedule"],
         warmup_steps=cfg["training.warmup_steps"],
         min_lr_factor=cfg["training.min_lr_factor"],
+        epoch_subset_size=cfg["training.epoch_subset_size"],
         x_loss_weight=cfg["training.loss_weight"],
         y_loss_weight=cfg["training.loss_weight"],
         mean_match_weight=cfg["training.loss_mean_weight"],
@@ -1393,6 +1559,23 @@ function compute_fd_jacobian_asymptotic(theta::NTuple{5,Float64}, cfg::Dict{Stri
                 attempts[ip] += 1
                 seed = seed_base + 1_000_000 * ip + 100_000 * (attempts[ip] - 1) + 10_000_000 * iter_id
                 @info "Computing calibration asymptotic FD Jacobian column" parameter = PARAM_NAMES[ip] h = h_current[ip] n_samples = fd_trajectories * fd_samples_per_traj spinup seed attempt = attempts[ip]
+                record_model_evaluation!(
+                    cfg;
+                    category="fd_jacobian",
+                    count=2 * fd_trajectories,
+                    phase="fd_column_attempt",
+                    theta=collect(theta),
+                    details=Dict(
+                        "parameter" => PARAM_NAMES[ip],
+                        "attempt" => attempts[ip],
+                        "h" => h_current[ip],
+                        "ensemble_trajectories" => fd_trajectories,
+                        "samples_per_trajectory" => fd_samples_per_traj,
+                        "save_every" => fd_save_every,
+                        "spinup_steps" => spinup,
+                        "seed" => seed,
+                    ),
+                )
             end
 
             run_pair! = function (pidx::Int, trj::Int)
@@ -1472,6 +1655,22 @@ function compute_fd_jacobian_asymptotic(theta::NTuple{5,Float64}, cfg::Dict{Stri
 
                 seed = seed_base + 1_000_000 * ip + 100_000 * attempt + 10_000_000 * iter_id
                 @info "Computing calibration asymptotic FD Jacobian column" parameter = PARAM_NAMES[ip] h n_samples spinup seed attempt = attempt + 1
+                record_model_evaluation!(
+                    cfg;
+                    category="fd_jacobian",
+                    count=2,
+                    phase="fd_column_attempt",
+                    theta=collect(theta),
+                    details=Dict(
+                        "parameter" => PARAM_NAMES[ip],
+                        "attempt" => attempt + 1,
+                        "h" => h,
+                        "n_samples" => n_samples,
+                        "save_every" => get(cfg, "integration.save_every", cfg["datasets.gfdt_save_every"]),
+                        "spinup_steps" => spinup,
+                        "seed" => seed,
+                    ),
+                )
                 try
                     avg_p = compute_steady_state_observables(theta_p, cfg, n_samples, spinup, seed)
                     avg_m = compute_steady_state_observables(theta_m, cfg, n_samples, spinup, seed)
@@ -1532,7 +1731,6 @@ end
 function compute_iteration_jacobians(cfg, theta, gfdt_data_path, checkpoint_path, iteration, run_dir)
     X = load_x_matrix(gfdt_data_path, cfg["datasets.gfdt_key"], cfg["integration.K"])
     obs_ref = obs_ref_tuple(cfg)
-    obs_m = Int(cfg["observables.m"])
     n_obs = observable_count(cfg)
 
     A = ArnoldCommon.compute_observables_series(
@@ -1542,7 +1740,7 @@ function compute_iteration_jacobians(cfg, theta, gfdt_data_path, checkpoint_path
         obs_ref.alpha1_ref,
         obs_ref.alpha2_ref,
         obs_ref.alpha3_ref,
-        obs_m,
+        cfg["observables.specs"],
     )
     G_obs = vec(mean(A; dims=2))
     all(isfinite, G_obs) || error("Observable averages contain non-finite values")
@@ -1640,6 +1838,20 @@ function compute_iteration_jacobians(cfg, theta, gfdt_data_path, checkpoint_path
         )
     end
 
+    if cfg["calibration.use_gaussian_sigma_jacobian"] && haskey(out, "unet") && haskey(out, "gaussian")
+        S_hybrid = copy(out["unet"].S)
+        @views S_hybrid[:, 5] .= out["gaussian"].S[:, 5]
+        jr_unet = out["unet"]
+        out["unet"] = (
+            S=S_hybrid,
+            G=jr_unet.G,
+            A=jr_unet.A,
+            times=jr_unet.times,
+            R_step=jr_unet.R_step,
+            C=jr_unet.C,
+        )
+    end
+
     return out
 end
 
@@ -1713,6 +1925,28 @@ function weighted_residual_norm(W::AbstractMatrix, r::AbstractVector{<:Real})
     return sqrt(q)
 end
 
+function parameter_column_scaling(S::AbstractMatrix, W::AbstractMatrix)
+    ncols = size(S, 2)
+    weighted_norms = ones(Float64, ncols)
+    scale_factors = ones(Float64, ncols)
+    min_norm = sqrt(eps(Float64))
+
+    for j in 1:ncols
+        col = @view S[:, j]
+        col_norm = weighted_residual_norm(W, col)
+        if !isfinite(col_norm) || col_norm <= min_norm
+            col_norm = norm(col)
+        end
+        if !isfinite(col_norm) || col_norm <= min_norm
+            col_norm = 1.0
+        end
+        weighted_norms[j] = col_norm
+        scale_factors[j] = 1.0 / col_norm
+    end
+
+    return weighted_norms, scale_factors
+end
+
 function weighted_observable_residual(cfg::Dict{String,Any},
     G::AbstractVector{<:Real},
     A_target::AbstractVector{<:Real};
@@ -1722,6 +1956,18 @@ function weighted_observable_residual(cfg::Dict{String,Any},
     r = Float64.(G[idx] .- A_target[idx])
     W_use = W === nothing ? build_weight_matrix(cfg, idx) : Matrix{Float64}(W)
     return weighted_residual_norm(W_use, r)
+end
+
+function requested_method_damping(cfg::Dict{String,Any})
+    method = String(get(cfg, "runtime.current_method", ""))
+    if method == "unet"
+        return Float64(get(cfg, "calibration.damping.unet", cfg["calibration.damping"]))
+    elseif method == "gaussian"
+        return Float64(get(cfg, "calibration.damping.gaussian", cfg["calibration.damping"]))
+    elseif method == "finite_difference"
+        return Float64(get(cfg, "calibration.damping.finite_difference", cfg["calibration.damping"]))
+    end
+    return Float64(cfg["calibration.damping"])
 end
 
 function estimate_observables(theta_candidate::Vector{Float64}, cfg::Dict{String,Any})
@@ -1734,6 +1980,7 @@ function estimate_observables(theta_candidate::Vector{Float64}, cfg::Dict{String
         spinup_steps=Int(cfg["observables_ensemble.spinup_steps"]),
         seed_base=Int(cfg["observables_ensemble.seed_base"]),
         parallel_trajectories=Bool(cfg["observables_ensemble.parallel_trajectories"]),
+        phase="generic_observable_estimate",
     )
 end
 
@@ -1744,15 +1991,35 @@ end
 function resolve_acceptance_ensemble_settings(cfg::Dict{String,Any};
     reference_residual::Real=Inf,
     cond_sub::Real=NaN)
+    refine_by_residual = Float64(reference_residual) <= Float64(cfg["acceptance.refine_residual_threshold"])
+    refine_by_conditioning = isfinite(Float64(cond_sub)) && Float64(cond_sub) >= Float64(cfg["acceptance.refine_conditioning_threshold"])
+    refined = refine_by_residual || refine_by_conditioning
+
+    if refined
+        reason = refine_by_residual ? "small_residual" : "ill_conditioned_jacobian"
+        return (
+            trajectories=Int(cfg["acceptance.refined_trajectories"]),
+            samples_per_trajectory=Int(cfg["acceptance.refined_samples_per_trajectory"]),
+            save_every=Int(cfg["acceptance.refined_save_every"]),
+            spinup_steps=Int(cfg["acceptance.refined_spinup_steps"]),
+            seed_base=Int(cfg["acceptance.seed_base"]),
+            parallel_trajectories=Bool(cfg["acceptance.refined_parallel_trajectories"]),
+            refined=true,
+            refine_reason=reason,
+            reference_residual=Float64(reference_residual),
+            conditioning_reference=Float64(cond_sub),
+        )
+    end
+
     return (
-        trajectories=Int(cfg["observables_ensemble.trajectories"]),
-        samples_per_trajectory=Int(cfg["observables_ensemble.samples_per_trajectory"]),
-        save_every=Int(cfg["observables_ensemble.save_every"]),
-        spinup_steps=Int(cfg["observables_ensemble.spinup_steps"]),
-        seed_base=Int(cfg["observables_ensemble.seed_base"]),
-        parallel_trajectories=Bool(cfg["observables_ensemble.parallel_trajectories"]),
+        trajectories=Int(cfg["acceptance.trajectories"]),
+        samples_per_trajectory=Int(cfg["acceptance.samples_per_trajectory"]),
+        save_every=Int(cfg["acceptance.save_every"]),
+        spinup_steps=Int(cfg["acceptance.spinup_steps"]),
+        seed_base=Int(cfg["acceptance.seed_base"]),
+        parallel_trajectories=Bool(cfg["acceptance.parallel_trajectories"]),
         refined=false,
-        refine_reason="shared_observable_estimator",
+        refine_reason="base_acceptance_ensemble",
         reference_residual=Float64(reference_residual),
         conditioning_reference=Float64(cond_sub),
     )
@@ -1766,7 +2033,10 @@ function estimate_observables_ensemble(theta_candidate::Vector{Float64}, cfg::Di
     seed_base::Int,
     parallel_trajectories::Bool,
     seed_offset::Int=0,
-    force_serial::Bool=false)
+    force_serial::Bool=false,
+    phase::AbstractString="",
+    trial_index::Int=0,
+    trial_scale::Real=NaN)
     compute_steady_state_observables = require_main_symbol(:compute_steady_state_observables)
     theta_tuple = theta_to_tuple(theta_candidate)
     n_obs = observable_count(cfg)
@@ -1804,14 +2074,55 @@ function estimate_observables_ensemble(theta_candidate::Vector{Float64}, cfg::Di
         end
     end
 
-    for trj in 1:trajectories
-        isempty(traj_errors[trj]) || error("Observable-ensemble trajectory $(trj) failed: $(traj_errors[trj])")
+    first_failed = findfirst(msg -> !isempty(msg), traj_errors)
+    if first_failed !== nothing
+        record_model_evaluation!(
+            cfg;
+            category="observable_ensemble",
+            count=trajectories,
+            phase=phase,
+            theta=theta_candidate,
+            status="failed",
+            details=Dict(
+                "samples_per_trajectory" => samples_per_trajectory,
+                "save_every" => save_every,
+                "spinup_steps" => spinup_steps,
+                "seed_base" => seed_base,
+                "seed_offset" => seed_offset,
+                "parallel_trajectories" => parallel_trajectories,
+                "trial_index" => trial_index,
+                "trial_scale" => Float64(trial_scale),
+                "failed_trajectory" => first_failed,
+                "error_message" => traj_errors[first_failed],
+            ),
+        )
+        error("Observable-ensemble trajectory $(first_failed) failed: $(traj_errors[first_failed])")
     end
+
+    record_model_evaluation!(
+        cfg;
+        category="observable_ensemble",
+        count=trajectories,
+        phase=phase,
+        theta=theta_candidate,
+        details=Dict(
+            "samples_per_trajectory" => samples_per_trajectory,
+            "save_every" => save_every,
+            "spinup_steps" => spinup_steps,
+            "seed_base" => seed_base,
+            "seed_offset" => seed_offset,
+            "parallel_trajectories" => parallel_trajectories,
+            "trial_index" => trial_index,
+            "trial_scale" => Float64(trial_scale),
+        ),
+    )
 
     return vec(mean(obs_mat; dims=2))
 end
 
-function estimate_observables_for_convergence(theta_candidate::Vector{Float64}, cfg::Dict{String,Any}; seed_offset::Int=0)
+function estimate_observables_for_convergence(theta_candidate::Vector{Float64}, cfg::Dict{String,Any};
+    seed_offset::Int=0,
+    phase::AbstractString="convergence")
     return estimate_observables_ensemble(
         theta_candidate,
         cfg;
@@ -1822,13 +2133,17 @@ function estimate_observables_for_convergence(theta_candidate::Vector{Float64}, 
         seed_base=Int(cfg["observables_ensemble.seed_base"]),
         parallel_trajectories=Bool(cfg["observables_ensemble.parallel_trajectories"]),
         seed_offset=seed_offset,
+        phase=phase,
     )
 end
 
 function estimate_observables_for_acceptance(theta_candidate::Vector{Float64}, cfg::Dict{String,Any};
     seed_offset::Int=0,
     force_serial::Bool=false,
-    settings=nothing)
+    settings=nothing,
+    phase::AbstractString="acceptance",
+    trial_index::Int=0,
+    trial_scale::Real=NaN)
     acc = settings === nothing ? resolve_acceptance_ensemble_settings(cfg) : settings
     method_offset = acceptance_method_seed_offset(cfg)
     return estimate_observables_ensemble(
@@ -1842,6 +2157,9 @@ function estimate_observables_for_acceptance(theta_candidate::Vector{Float64}, c
         parallel_trajectories=Bool(acc.parallel_trajectories),
         seed_offset=method_offset + seed_offset,
         force_serial=force_serial,
+        phase=phase,
+        trial_index=trial_index,
+        trial_scale=trial_scale,
     )
 end
 
@@ -1904,7 +2222,34 @@ function theta_candidate_is_stable(theta_candidate::Vector{Float64}, cfg::Dict{S
                 state_max=cfg["numerical.state_max"],
                 max_boundary_hits=max(3, min(12, Int(cfg["numerical.max_boundary_hits"]))),
             )
+            record_model_evaluation!(
+                cfg;
+                category="stability_check",
+                count=1,
+                phase="stability_rollout",
+                theta=theta_candidate,
+                details=Dict(
+                    "nsamples" => spec.nsamples,
+                    "save_every" => spec.save_every,
+                    "spinup_steps" => spinup_steps,
+                    "rng_seed" => spec.seed,
+                ),
+            )
         catch
+            record_model_evaluation!(
+                cfg;
+                category="stability_check",
+                count=1,
+                phase="stability_rollout_failed",
+                theta=theta_candidate,
+                status="failed",
+                details=Dict(
+                    "nsamples" => spec.nsamples,
+                    "save_every" => spec.save_every,
+                    "spinup_steps" => spinup_steps,
+                    "rng_seed" => spec.seed,
+                ),
+            )
             return false
         end
     end
@@ -1924,23 +2269,24 @@ function perform_newton_update(S, G, A_target, theta, cfg)
     nfree = length(free_idx)
     theta_current = Float64.(theta)
     gamma_requested = Float64(cfg["calibration.regularization_gamma"])
-    gamma_floor = max(gamma_requested, 1e-8)
-    damping_requested = Float64(cfg["calibration.damping"])
-    lm_max_attempts = Int(cfg["calibration.lm_max_attempts"])
-    lm_growth_factor = Float64(cfg["calibration.lm_growth_factor"])
-    min_rho = Float64(cfg["calibration.min_actual_to_predicted_ratio"])
+    damping_requested = requested_method_damping(cfg)
+    require_improving_update = Bool(get(cfg, "calibration.require_improving_update", true))
+    backtracking_scales = Float64.(get(cfg, "calibration.backtracking_scales", [1.0, 0.5, 0.25]))
 
-    cond_sub = try
+    cond_sub_raw = try
         cond(S_sub)
     catch
         NaN
     end
-
-    line_search_used = Bool(cfg["calibration.line_search"])
-    line_search_max = line_search_used ? Int(cfg["calibration.line_search_max"]) : 0
-    nested_parallel_active = Bool(get(cfg, "runtime.method_parallel_active", false))
-    allow_nested_parallel = Bool(get(cfg, "performance.allow_nested_parallel", true))
-    requested_parallel_line_search = Bool(get(cfg, "performance.parallel_line_search", true))
+    column_weighted_norms, column_scale_factors = parameter_column_scaling(S_sub, W_sub)
+    scale_matrix = Diagonal(column_scale_factors)
+    S_sub_scaled = S_sub * scale_matrix
+    cond_sub_scaled = try
+        cond(S_sub_scaled)
+    catch
+        NaN
+    end
+    cond_sub = cond_sub_scaled
 
     previous_obs_residual = Float64(get(cfg, "runtime.previous_observable_residual", Inf))
     acceptance_settings = resolve_acceptance_ensemble_settings(
@@ -1948,200 +2294,230 @@ function perform_newton_update(S, G, A_target, theta, cfg)
         reference_residual=previous_obs_residual,
         cond_sub=cond_sub,
     )
+    raw_diag = (cond=NaN, nrm_rhs=NaN)
+    gamma_effective = gamma_requested
+    step_cap_triggered = false
+    step_cap_factor = 1.0
+    damping_effective = damping_requested
     acceptance_parallel_eval = Bool(acceptance_settings.parallel_trajectories) &&
         Int(acceptance_settings.trajectories) > 1 &&
         Base.Threads.nthreads() > 1
-    do_parallel_line_search = requested_parallel_line_search && line_search_used && line_search_max > 0
-    do_parallel_line_search = do_parallel_line_search && (allow_nested_parallel || !nested_parallel_active)
-    do_parallel_line_search = do_parallel_line_search && !acceptance_parallel_eval
-    force_serial_acceptance = false
-    acceptance_fallback_used = false
-    acceptance_current = try
-        estimate_observables_for_acceptance(
-            theta_current,
-            cfg;
-            force_serial=force_serial_acceptance,
-            settings=acceptance_settings,
-        )
-    catch err
-        acceptance_fallback_used = true
-        @warn "Acceptance-ensemble estimate failed at current theta; falling back to GFDT observables" method = get(cfg, "runtime.current_method", "") error = sprint(showerror, err)
-        vec(Float64.(G))
-    end
-
-    residual_before = weighted_residual_norm(W_sub, acceptance_current[active_idx] .- A_sub)
-    residual_before_linear = weighted_residual_norm(W_sub, G_sub .- A_sub)
-    residual_before_unweighted = norm(acceptance_current[active_idx] .- A_sub)
-
-    theta_best = copy(theta_current)
+    correction_full = zeros(Float64, 5)
+    correction_full_raw = zeros(Float64, 5)
+    correction_full_scaled = zeros(Float64, 5)
     applied_step = zeros(Float64, 5)
-    residual_after = residual_before
-    residual_after_predicted = residual_before
+    theta_best = copy(theta_current)
+    trial_records = Dict{String,Any}[]
+    residual_after = previous_obs_residual
+    residual_after_predicted = previous_obs_residual
+    predicted_reduction = NaN
+    actual_reduction = NaN
+    actual_to_predicted_ratio = NaN
+    best_candidate_residual = Inf
     line_search_scale = 0.0
     line_search_accepted = false
     stability_checked = false
     stability_accepted = false
-    raw_diag = (cond=NaN, nrm_rhs=NaN)
-    correction_full = zeros(Float64, 5)
-    correction_full_raw = zeros(Float64, 5)
-    lm_attempts_used = 0
-    gamma_effective = gamma_requested
-    predicted_reduction = 0.0
-    actual_reduction = 0.0
-    actual_to_predicted_ratio = -Inf
-    step_cap_triggered = false
-    step_cap_factor = 1.0
-    damping_effective = damping_requested
-    best_candidate_residual = Inf
+    acceptance_fallback_used = false
+    force_serial_acceptance = false
+    residual_before_linear = weighted_residual_norm(W_sub, G_sub .- A_sub)
 
-    for lm_attempt in 1:lm_max_attempts
-        lm_attempts_used = lm_attempt
-        gamma_effective = gamma_requested > 0 ? gamma_requested * (lm_growth_factor ^ (lm_attempt - 1)) :
-            gamma_floor * (lm_growth_factor ^ (lm_attempt - 1))
-        Gamma_sub = Symmetric(Matrix{Float64}(I, nfree, nfree) * gamma_effective)
-        correction_sub, raw_diag = newton_step_bridge(S_sub, W_sub, Gamma_sub, G_sub, A_sub)
+    Gamma_sub = Symmetric(Matrix{Float64}(I, nfree, nfree) * gamma_effective)
+    correction_sub_scaled, raw_diag = newton_step_bridge(S_sub_scaled, W_sub, Gamma_sub, G_sub, A_sub)
+    correction_sub = column_scale_factors .* correction_sub_scaled
+    correction_full_raw[free_idx] .= correction_sub
+    correction_full_scaled[free_idx] .= correction_sub_scaled
+    correction_full .= correction_full_raw
 
-        fill!(correction_full_raw, 0.0)
-        correction_full_raw[free_idx] .= correction_sub
+    rel_cap = active_relative_step_cap(cfg, cond_sub)
+    base_relative_step = relative_step_norm(damping_requested .* correction_full_raw, theta_current)
+    if isfinite(rel_cap) && base_relative_step > rel_cap
+        step_cap_triggered = true
+        step_cap_factor = rel_cap / max(base_relative_step, eps())
+        damping_effective *= step_cap_factor
+    end
 
-        damping_effective = damping_requested
-        step_cap_triggered = false
-        step_cap_factor = 1.0
-        rel_cap = active_relative_step_cap(cfg, cond_sub)
-        base_relative_step = relative_step_norm(damping_requested .* correction_full_raw, theta_current)
-        if isfinite(rel_cap) && base_relative_step > rel_cap
-            step_cap_triggered = true
-            step_cap_factor = rel_cap / max(base_relative_step, eps())
-            damping_effective *= step_cap_factor
+    if require_improving_update
+        acceptance_current = try
+            estimate_observables_for_acceptance(
+                theta_current,
+                cfg;
+                force_serial=force_serial_acceptance,
+                settings=acceptance_settings,
+                phase="acceptance_current",
+            )
+        catch err
+            acceptance_fallback_used = true
+            @warn "Acceptance-ensemble estimate failed at current theta; falling back to GFDT observables" method = get(cfg, "runtime.current_method", "") error = sprint(showerror, err)
+            vec(Float64.(G))
         end
 
-        scales = [damping_effective / (2.0 ^ h) for h in 0:line_search_max]
-        linear_delta_obs = S_sub * correction_sub
+        residual_before = weighted_residual_norm(W_sub, acceptance_current[active_idx] .- A_sub)
+        residual_before_unweighted = norm(acceptance_current[active_idx] .- A_sub)
+        scales = damping_effective .* backtracking_scales
 
-        evaluate_candidate = function (scale::Float64)
+        for (trial_index, scale) in enumerate(scales)
+            theta_try = theta_current .- scale .* correction_full_raw
+            local_applied_step = scale .* correction_full_raw
+            res_try = Inf
+            pred_res = Inf
+            pred_red = NaN
+            act_red = NaN
+            rho = NaN
+            improved = false
+            accepted = false
+            reason = "residual_not_improved"
+
             try
-                theta_try = theta_current .- scale .* correction_full_raw
                 obs_try = estimate_observables_for_acceptance(
                     theta_try,
                     cfg;
                     force_serial=force_serial_acceptance,
                     settings=acceptance_settings,
+                    phase="acceptance_trial",
+                    trial_index=trial_index,
+                    trial_scale=scale,
                 )
                 res_try = weighted_residual_norm(W_sub, obs_try[active_idx] .- A_sub)
-                pred_obs = acceptance_current[active_idx] .- scale .* linear_delta_obs
+                pred_obs = acceptance_current[active_idx] .- scale .* (S_sub * correction_sub)
                 pred_res = weighted_residual_norm(W_sub, pred_obs .- A_sub)
                 pred_red = residual_before - pred_res
                 act_red = residual_before - res_try
-                need_stability = act_red > 0
-                stable_try = true
-                if need_stability
-                    stable_try = theta_candidate_is_stable(theta_try, cfg)
-                end
-                rho = pred_red > eps() ? act_red / pred_red : -Inf
-                accepted = act_red > 0 && pred_red > eps() && rho >= min_rho && stable_try
-                return (
-                    scale=scale,
-                    theta_try=theta_try,
-                    obs_try=obs_try,
-                    res_try=res_try,
-                    pred_res=pred_res,
-                    pred_red=pred_red,
-                    act_red=act_red,
-                    rho=rho,
-                    need_stability=need_stability,
-                    stable_try=stable_try,
-                    accepted=accepted,
-                    err="",
-                )
-            catch err
-                return (
-                    scale=scale,
-                    theta_try=copy(theta_current),
-                    obs_try=copy(acceptance_current),
-                    res_try=Inf,
-                    pred_res=Inf,
-                    pred_red=-Inf,
-                    act_red=-Inf,
-                    rho=-Inf,
-                    need_stability=false,
-                    stable_try=false,
-                    accepted=false,
-                    err=sprint(showerror, err),
-                )
-            end
-        end
+                rho = pred_red > eps() ? act_red / pred_red : NaN
+                improved = res_try < residual_before
+                best_candidate_residual = min(best_candidate_residual, res_try)
 
-        results = Vector{Any}(undef, length(scales))
-        if do_parallel_line_search
-            max_parallel = min(length(scales), max(1, Int(get(cfg, "performance.max_parallel_line_search", 3))), Base.Threads.nthreads())
-            sem = Base.Semaphore(max_parallel)
-            @sync for idx in eachindex(scales)
-                scale = scales[idx]
-                Base.Threads.@spawn begin
-                    Base.acquire(sem)
-                    try
-                        results[idx] = evaluate_candidate(scale)
-                    finally
-                        Base.release(sem)
+                if improved
+                    stability_checked = true
+                    if theta_candidate_is_stable(theta_try, cfg)
+                        accepted = true
+                        stability_accepted = true
+                        reason = "accepted_improving_step"
+                    else
+                        reason = "stability_rejected"
                     end
                 end
+            catch err
+                reason = "evaluation_failed: " * sprint(showerror, err)
             end
-        else
-            for idx in eachindex(scales)
-                results[idx] = evaluate_candidate(scales[idx])
+
+            push!(trial_records, Dict(
+                "trial_index" => trial_index,
+                "scale" => scale,
+                "theta_trial" => copy(theta_try),
+                "applied_step" => copy(local_applied_step),
+                "residual_after" => res_try,
+                "predicted_residual" => pred_res,
+                "predicted_reduction" => pred_red,
+                "actual_reduction" => act_red,
+                "actual_to_predicted_ratio" => rho,
+                "improved" => improved,
+                "accepted" => accepted,
+                "reason" => reason,
+            ))
+            record_update_attempt!(
+                cfg;
+                phase="backtracking_trial",
+                theta_before=theta_current,
+                theta_trial=theta_try,
+                correction_raw=correction_full_raw,
+                applied_step=local_applied_step,
+                scale=scale,
+                residual_before=residual_before,
+                residual_after=res_try,
+                improved=improved,
+                accepted=accepted,
+                reason=reason,
+                trial_index=trial_index,
+                details=Dict(
+                    "predicted_residual" => pred_res,
+                    "predicted_reduction" => pred_red,
+                    "actual_reduction" => act_red,
+                    "actual_to_predicted_ratio" => rho,
+                ),
+            )
+
+            if accepted
+                theta_best .= theta_try
+                applied_step .= local_applied_step
+                residual_after = res_try
+                residual_after_predicted = pred_res
+                predicted_reduction = pred_red
+                actual_reduction = act_red
+                actual_to_predicted_ratio = rho
+                line_search_scale = scale
+                line_search_accepted = true
+                break
             end
         end
 
-        accepted_results = Any[]
-        local_best_residual = Inf
-        for r in results
-            if !isempty(r.err)
-                @warn "Acceptance evaluation failed for candidate theta; trying stronger regularization" scale = r.scale gamma = gamma_effective error = r.err
-                continue
-            end
-            if r.need_stability
-                stability_checked = true
-            end
-            if r.need_stability && !r.stable_try
-                @warn "Rejecting Newton candidate: unstable stochastic rollout" scale = r.scale gamma = gamma_effective res_try = r.res_try
-                continue
-            end
-            local_best_residual = min(local_best_residual, r.res_try)
-            if r.accepted
-                push!(accepted_results, r)
-            end
+        if !line_search_accepted
+            theta_best .= theta_current
+            applied_step .= 0.0
+            residual_after = residual_before
+            residual_after_predicted = residual_before
+            best_candidate_residual = isfinite(best_candidate_residual) ? best_candidate_residual : residual_before
+            predicted_reduction = 0.0
+            actual_reduction = 0.0
+            actual_to_predicted_ratio = NaN
+            record_update_attempt!(
+                cfg;
+                phase="backtracking_result",
+                theta_before=theta_current,
+                theta_trial=theta_current,
+                correction_raw=correction_full_raw,
+                applied_step=zeros(Float64, 5),
+                scale=0.0,
+                residual_before=residual_before,
+                residual_after=residual_before,
+                improved=false,
+                accepted=false,
+                reason="no_improving_step_found",
+                trial_index=length(scales) + 1,
+            )
         end
-        best_candidate_residual = min(best_candidate_residual, local_best_residual)
-
-        if !isempty(accepted_results)
-            best_idx = argmin([r.res_try for r in accepted_results])
-            chosen = accepted_results[best_idx]
-            theta_best .= chosen.theta_try
-            applied_step .= chosen.scale .* correction_full_raw
-            correction_full .= correction_full_raw
-            residual_after = chosen.res_try
-            residual_after_predicted = chosen.pred_res
-            predicted_reduction = chosen.pred_red
-            actual_reduction = chosen.act_red
-            actual_to_predicted_ratio = chosen.rho
-            line_search_scale = chosen.scale
-            line_search_accepted = true
-            stability_accepted = true
-            break
-        end
-    end
-
-    if !line_search_accepted
-        theta_best .= theta_current
-        applied_step .= 0.0
-        correction_full .= correction_full_raw
-        residual_after = residual_before
-        residual_after_predicted = residual_before
-        predicted_reduction = 0.0
-        actual_reduction = 0.0
-        actual_to_predicted_ratio = -Inf
-        line_search_scale = 0.0
-        stability_accepted = false
+    else
+        theta_best .= theta_current .- damping_effective .* correction_full_raw
+        applied_step .= damping_effective .* correction_full_raw
+        line_search_scale = damping_effective
+        line_search_accepted = true
+        residual_before = previous_obs_residual
+        residual_before_unweighted = Float64(get(cfg, "runtime.previous_observable_residual_unweighted", Inf))
+        residual_after = NaN
+        residual_after_predicted = NaN
+        best_candidate_residual = NaN
+        predicted_reduction = NaN
+        actual_reduction = NaN
+        actual_to_predicted_ratio = NaN
+        push!(trial_records, Dict(
+            "trial_index" => 1,
+            "scale" => damping_effective,
+            "theta_trial" => copy(theta_best),
+            "applied_step" => copy(applied_step),
+            "residual_after" => NaN,
+            "predicted_residual" => NaN,
+            "predicted_reduction" => NaN,
+            "actual_reduction" => NaN,
+            "actual_to_predicted_ratio" => NaN,
+            "improved" => false,
+            "accepted" => true,
+            "reason" => "forced_update_without_improvement_check",
+        ))
+        record_update_attempt!(
+            cfg;
+            phase="forced_update",
+            theta_before=theta_current,
+            theta_trial=theta_best,
+            correction_raw=correction_full_raw,
+            applied_step=applied_step,
+            scale=damping_effective,
+            residual_before=residual_before,
+            residual_after=NaN,
+            improved=false,
+            accepted=true,
+            reason="forced_update_without_improvement_check",
+            trial_index=1,
+        )
     end
 
     diagnostics = Dict{String,Any}(
@@ -2152,14 +2528,14 @@ function perform_newton_update(S, G, A_target, theta, cfg)
         "residual_before_unweighted" => residual_before_unweighted,
         "residual_after" => residual_after,
         "residual_after_predicted" => residual_after_predicted,
-        "line_search_used" => line_search_used,
-        "parallel_line_search_requested" => requested_parallel_line_search,
-        "parallel_line_search_used" => do_parallel_line_search,
+        "line_search_used" => require_improving_update,
+        "parallel_line_search_requested" => false,
+        "parallel_line_search_used" => false,
         "line_search_accepted" => line_search_accepted,
         "line_search_scale" => line_search_scale,
         "stability_checked" => stability_checked,
         "stability_accepted" => stability_accepted,
-        "lm_attempts_used" => lm_attempts_used,
+        "lm_attempts_used" => 1,
         "gamma_requested" => gamma_requested,
         "gamma_effective" => gamma_effective,
         "predicted_reduction" => predicted_reduction,
@@ -2178,6 +2554,8 @@ function perform_newton_update(S, G, A_target, theta, cfg)
         "acceptance_parallel_eval" => acceptance_parallel_eval,
         "damping_requested" => damping_requested,
         "damping_effective" => damping_effective,
+        "require_improving_update" => require_improving_update,
+        "backtracking_scales" => copy(backtracking_scales),
         "relative_step_cap_active" => isfinite(active_relative_step_cap(cfg, cond_sub)),
         "relative_step_cap" => isfinite(active_relative_step_cap(cfg, cond_sub)) ? active_relative_step_cap(cfg, cond_sub) : 0.0,
         "relative_step_cap_triggered" => step_cap_triggered,
@@ -2187,9 +2565,16 @@ function perform_newton_update(S, G, A_target, theta, cfg)
         "weight_matrix_mode" => cfg["calibration.weight_matrix"],
         "correction_full" => copy(correction_full),
         "correction_full_raw" => copy(correction_full_raw),
+        "correction_full_scaled" => copy(correction_full_scaled),
         "applied_step" => copy(applied_step),
         "active_subproblem_cond" => cond_sub,
+        "active_subproblem_cond_raw" => cond_sub_raw,
+        "active_subproblem_cond_scaled" => cond_sub_scaled,
+        "parameter_column_weighted_norms" => copy(column_weighted_norms),
+        "parameter_column_scale_factors" => copy(column_scale_factors),
         "best_candidate_residual" => best_candidate_residual,
+        "trial_records" => trial_records,
+        "update_policy" => require_improving_update ? "accept_first_improving_backtracking_step" : "forced_single_step",
     )
 
     return theta_best, applied_step, diagnostics
@@ -2221,8 +2606,10 @@ function style_for_method(method::String)
         return (label="UNet", color=:orangered3, linestyle=:solid, marker=:circle, markersize=5)
     elseif method == "gaussian"
         return (label="Gaussian", color=:black, linestyle=:dash, marker=:utriangle, markersize=5)
+    elseif method == "numerical_integration"
+        return (label="Numerical", color=:dodgerblue3, linestyle=:solid, marker=:star5, markersize=5)
     elseif method == "finite_difference"
-        return (label="Finite-difference", color=:dodgerblue3, linestyle=:solid, marker=:diamond, markersize=5)
+        return (label="Finite-difference", color=:steelblue4, linestyle=:dashdot, marker=:diamond, markersize=5)
     end
     return (label=method, color=:gray30, linestyle=:solid, marker=:auto, markersize=4)
 end
@@ -2231,8 +2618,8 @@ function save_response_iteration_archive(path::AbstractString,
     cfg::Dict{String,Any},
     jacobians,
     observables::Dict{String,Vector{Float64}})
-    obs_names = observable_names(Int(cfg["observables.m"]))
-    obs_labels = observable_labels(Int(cfg["observables.m"]))
+    obs_names = observable_names(cfg)
+    obs_labels = observable_labels(cfg)
     active_idx = Vector{Int}(get(cfg, "runtime.iteration_active_observables", cfg["calibration.active_observables"]))
     free_idx = Vector{Int}(get(cfg, "runtime.iteration_free_parameters", cfg["calibration.free_parameters"]))
     A_target = get(cfg, "runtime.A_target", nothing)
@@ -2278,12 +2665,13 @@ function save_response_iteration_figure(path::AbstractString, cfg::Dict, jacobia
     save_response_figure = require_main_symbol(:save_response_figure)
     active_idx = Vector{Int}(get(cfg, "runtime.iteration_active_observables", cfg["calibration.active_observables"]))
     isempty(active_idx) && return ""
-    obs_labels_all = observable_labels(Int(cfg["observables.m"]))
+    obs_labels_all = observable_labels(cfg)
     selected_obs_labels = [obs_labels_all[i] for i in active_idx]
 
     curves = NamedTuple[]
     times = nothing
-    for method in method_order()
+    plot_methods = response_figure_methods(cfg)
+    for method in plot_methods
         haskey(jacobians, method) || continue
         jr = jacobians[method]
         if length(jr.times) == 0 || size(jr.R_step, 3) == 0
@@ -2305,7 +2693,7 @@ function save_response_iteration_figure(path::AbstractString, cfg::Dict, jacobia
     isempty(curves) && return ""
 
     asymptotic_curves = NamedTuple[]
-    for method in method_order()
+    for method in plot_methods
         haskey(jacobians, method) || continue
         style = style_for_method(method)
         push!(asymptotic_curves, (
@@ -2313,18 +2701,6 @@ function save_response_iteration_figure(path::AbstractString, cfg::Dict, jacobia
             color=style.color,
             linestyle=style.linestyle,
             jacobians=jacobians[method].S[active_idx, :],
-        ))
-    end
-
-    # Guarantee that finite-difference asymptotes are present whenever available,
-    # even though finite differences have no time-dependent GFDT curve.
-    if haskey(jacobians, "finite_difference") && !any(c -> c.label == "Finite-difference", asymptotic_curves)
-        style = style_for_method("finite_difference")
-        push!(asymptotic_curves, (
-            label=style.label,
-            color=style.color,
-            linestyle=style.linestyle,
-            jacobians=jacobians["finite_difference"].S[active_idx, :],
         ))
     end
 
@@ -2343,6 +2719,63 @@ function save_response_iteration_figure(path::AbstractString, cfg::Dict, jacobia
         dpi=cfg["figures.dpi"],
         observable_row_labels=selected_obs_labels,
     )
+end
+
+function select_numerical_init_states(X::Matrix{Float64}, n_init::Int)
+    n_samples = size(X, 2)
+    n_keep = clamp(n_init, 1, n_samples)
+    idx = unique(round.(Int, range(1, n_samples, length=n_keep)))
+    return X[:, idx]
+end
+
+function maybe_add_numerical_response_iteration!(jacobians, cfg::Dict, theta::AbstractVector{<:Real})
+    "numerical_integration" in response_figure_methods(cfg) || return jacobians
+    haskey(jacobians, "numerical_integration") && return jacobians
+
+    gfdt_path = String(get(cfg, "runtime.current_gfdt_path", ""))
+    if isempty(strip(gfdt_path)) || !isfile(gfdt_path) || isempty(jacobians)
+        return jacobians
+    end
+
+    compute_numerical_responses = require_main_symbol(:compute_numerical_responses)
+    extract_asymptotic_jacobians = require_main_symbol(:extract_asymptotic_jacobians)
+
+    X_model = load_x_matrix(gfdt_path, cfg["datasets.gfdt_key"], cfg["integration.K"])
+    n_init = min(Int(cfg["responses.finite_difference.ensemble_trajectories"]), size(X_model, 2))
+    Xinit = select_numerical_init_states(X_model, n_init)
+
+    n_lags, dt_obs = response_n_lags(cfg, size(X_model, 2))
+    theta_nt = (
+        Float64(theta[1]),
+        Float64(theta[2]),
+        Float64(theta[3]),
+        Float64(theta[4]),
+        Float64(theta[5]),
+    )
+    R_step, _, _ = compute_numerical_responses(theta_nt, Xinit, cfg, n_lags)
+    times = collect(0:n_lags) .* dt_obs
+    C = ArnoldCommon.step_to_impulse(R_step, times)
+    S = extract_asymptotic_jacobians(times, R_step; t_start=cfg["responses.t_start"], t_end=cfg["responses.t_end"])
+
+    ref_method = if haskey(jacobians, "unet")
+        "unet"
+    elseif haskey(jacobians, "gaussian")
+        "gaussian"
+    elseif haskey(jacobians, "finite_difference")
+        "finite_difference"
+    else
+        first(sort(collect(keys(jacobians))))
+    end
+    jr_ref = jacobians[ref_method]
+    jacobians["numerical_integration"] = (
+        S=S,
+        G=jr_ref.G,
+        A=jr_ref.A,
+        times=times,
+        R_step=R_step,
+        C=C,
+    )
+    return jacobians
 end
 
 function save_stats_iteration_figure(path::AbstractString, cfg::Dict)
@@ -2404,12 +2837,21 @@ function save_iteration_outputs(state, cfg, run_dir, iteration, jacobians, obser
         TOML.print(io, params_doc)
     end
 
+    jacobians_for_output = copy(jacobians)
+    try
+        maybe_add_numerical_response_iteration!(jacobians_for_output, cfg, state.theta)
+    catch err
+        err_msg = sprint(showerror, err)
+        @warn "Failed to compute numerical response curves for iteration outputs" iteration error = err_msg
+        ArnoldCommon.append_log(joinpath(run_dir, "calibration_log.txt"), "Iteration $iteration failed to compute numerical response curves for iteration outputs: $err_msg")
+    end
+
     jac_path = joinpath(results_dir, "jacobians.hdf5")
-    save_response_iteration_archive(jac_path, cfg, jacobians, observables)
+    save_response_iteration_archive(jac_path, cfg, jacobians_for_output, observables)
 
     obs_path = joinpath(results_dir, "observables.csv")
     A_target = get(cfg, "runtime.A_target", nothing)
-    obs_names = observable_names(Int(cfg["observables.m"]))
+    obs_names = observable_names(cfg)
     open(obs_path, "w") do io
         println(io, "method,observable,value")
         for method in sort(collect(keys(observables)))
@@ -2434,7 +2876,7 @@ function save_iteration_outputs(state, cfg, run_dir, iteration, jacobians, obser
     if cfg["figures.save_per_iteration"]
         response_fig = joinpath(figures_dir, @sprintf("responses_%dx5.png", observable_count(cfg)))
         try
-            save_response_iteration_figure(response_fig, cfg, jacobians)
+            save_response_iteration_figure(response_fig, cfg, jacobians_for_output)
         catch err
             @warn "Failed to save response figure" path = response_fig error = sprint(showerror, err)
         end
@@ -2499,7 +2941,7 @@ function save_convergence_figure(state, cfg, run_dir)
     panels = Vector{Any}(undef, 2 * ncols)
     theta_ref = true_theta_reference(cfg)
     A_target = get(cfg, "runtime.A_target", nothing)
-    obs_names = observable_names(Int(cfg["observables.m"]))
+    obs_names = observable_names(cfg)
 
     for col in 1:ncols
         if col <= length(free_idx)

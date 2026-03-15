@@ -1,0 +1,266 @@
+# ──────────────────────────────────────────────────────
+# Parameter calibration configuration
+# ──────────────────────────────────────────────────────
+
+[paths]
+data_params = "scripts/arnold/parameters_data.toml"
+train_params = "scripts/arnold/parameters_train.toml"
+responses_params = "scripts/arnold/parameters_responses.toml"
+runs_root = "scripts/arnold/runs_calibration"
+
+[run]
+# Each claimed run gets its own stochastic stream offset:
+# effective offset = seed_offset + (run_id - 1) * seed_stride.
+# The offset is now applied only to training-side randomness and Langevin
+# diagnostics. Observable evaluations and GFDT datasets use common seeds across
+# runs so G(theta) is reproducible for a fixed theta.
+run_id_padding = 3
+seed_stride = 1_000_000_000
+seed_offset = 0
+
+[truth]
+# How to obtain target observables A_target.
+# "two_scale" = integrate deterministic two-scale L96 (default)
+# "file"      = load from HDF5 (specify truth_file and truth_key)
+source = "two_scale"
+nsamples = 200_000        # samples for target observable estimation
+spinup_steps = 3_000
+rng_seed = 123
+save_every = 200         # save_every for truth trajectory
+
+[twoscale]
+# Optional overrides for two-scale deterministic truth generation in calibration.
+# These values now make K/J tunable directly from this file.
+K = 36
+J = 10
+F = 10.0
+h = 1.0
+c = 10.0
+b = 10.0
+dt = 0.005
+process_noise_sigma_y = 0.0
+process_noise_sigma_x = 1.0
+
+[closure]
+# Optional reduced-model closure overrides used by calibration defaults.
+F = 10.0
+alpha0_initial = 0.04636738678495637
+alpha1_initial = 0.3660714354042205
+alpha2_initial = 0.011016434610840226
+alpha3_initial = -0.0019401319945469076
+sigma_initial = 0.41443993804139906
+auto_fit = true
+fit_dataset_role = "two_scale_fit"
+fit_start_index = 2
+fit_samples = 50_000
+fit_min_samples = 500
+
+[initial_theta]
+# Starting guess for the closure parameters.
+# If [closure].auto_fit = true, these are overridden by regression fit.
+alpha0 = 0.04636738678495637
+alpha1 = 0.3660714354042205
+alpha2 = 0.011016434610840226
+alpha3 = -0.0019401319945469076
+sigma = 0.41443993804139906
+# Random perturbation of initial guess: each parameter is perturbed by
+# ±perturbation_fraction * |value|.  Set to 0.0 for no perturbation.
+perturbation_fraction = 0.0
+
+[observables]
+# Legacy lag parameter used only when `names` is omitted.
+m = 18
+
+# Observable set used by the calibration driver.
+# Chosen to separate mean, variance, asymmetry, tail shape, and short-range
+# spatial dependence without the redundancy of raw second moments and many
+# long-lag correlations.
+names = [
+    "mean_x",
+    "var_x",
+    "skew_x",
+    "kurt_x",
+    "cov_x_lag1",
+    "cov_x_lag2",
+    "cov_x_lag4",
+]
+
+[calibration]
+max_iterations = 25
+tol_theta = 1e-3          # convergence: ‖Δθ‖/‖θ‖ < tol
+tol_obs = 5e-3            # convergence: ‖G - A_target‖ < tol
+damping = 0.5             # step size multiplier (1.0 = full Newton)
+damping_unet = 1.0        # per-method override for UNet-GFDT
+damping_gaussian = 1.0    # per-method override for Gaussian-GFDT
+damping_finite_difference = 1.0  # per-method override for finite differences
+require_improving_update = false   # if false, commit θ - damping * Δθ without checking residual improvement
+backtracking_scales = [1.0, 0.5, 0.25]  # tried sequentially when require_improving_update = true
+retry_divergent_update = true  # if true, retry an unstable proposed update with up to three step halvings before deactivating the method
+line_search = true        # legacy flag kept for backward compatibility; simplified updater ignores it
+line_search_max = 2       # legacy parameter kept for backward compatibility
+regularization_gamma = 1e-2  # Tikhonov regularization: Γ = γ * I
+lm_max_attempts = 4       # legacy parameter kept for backward compatibility
+lm_growth_factor = 10.0   # legacy parameter kept for backward compatibility
+min_actual_to_predicted_ratio = 0.1  # trust-region acceptance threshold rho = actual/predicted decrease
+max_relative_step = 0.0   # <= 0 disables a global relative-step cap
+conditioning_step_threshold = 1e4     # activate stricter step cap when cond(S_active,free) exceeds this
+conditioned_max_relative_step = 5e-2  # cap ‖Δθ‖/‖θ‖ for ill-conditioned Jacobians
+postcheck_rel_tol = 0.05  # retained for diagnostics; simplified updater no longer rolls back after post-check
+postcheck_abs_tol = 1e-3  # retained for diagnostics; simplified updater no longer rolls back after post-check
+convergence_scope = "primary"  # "primary" | "all"; keep FD/gaussian diagnostic without gating the run
+weight_matrix = "diagonal"   # "identity" | "inverse_cov" | "diagonal"
+apply_sigma_jacobian_mask = false  # set false to keep the sigma Jacobian column unmasked
+
+# Which parameters to update (1-indexed). Empty = all.
+# Example: [1, 2, 3, 4, 5] for all, [1, 2, 5] for α₀, α₁, σ only.
+free_parameters = [1, 2, 3, 4, 5]
+
+# Which observables to match (1-indexed). Empty = all names above.
+active_observables = [1, 2, 3, 4, 5, 6, 7]
+
+# Preferred name-based selection. When non-empty, this overrides active_observables.
+active_observable_names = [
+    "mean_x",
+    "var_x",
+    "skew_x",
+    "kurt_x",
+    "cov_x_lag1",
+    "cov_x_lag2",
+    "cov_x_lag4",
+]
+
+# Optional staged freeze in the first `freeze_steps` iterations.
+# During this staged window:
+# 1) listed parameters are frozen (removed from free_parameters)
+# 2) the last n observables are dropped, where n = number of frozen parameters
+#    (drops φ_{m+2}, φ_{m+1}, ... i.e. highest-lag cross-correlations first)
+freeze_parameters = []
+freeze_steps = 0
+
+[methods]
+# Which Jacobian methods to run. All enabled methods run in parallel at each iteration.
+unet = true
+gaussian = true
+finite_difference = true   # expensive; usually for validation only
+
+[datasets]
+# Per-iteration dataset sizes for the stochastic model
+train_nsamples = 300_000
+train_save_every = 200
+train_rng_seed_base = 2000  # actual seed = base + iteration
+train_ensemble_trajectories = 24
+train_parallel_trajectories = true
+
+gfdt_nsamples = 300_000
+gfdt_save_every = 2
+gfdt_rng_seed_base = 3000
+
+[training]
+# UNet training settings per calibration iteration.
+# These override parameters_train.toml when running inside the calibration loop.
+epochs = 20               # can be less than standalone training
+device = "GPU:0"
+resume_from_previous = true  # warm-start from previous iteration's checkpoint
+
+[responses]
+# GFDT response settings per iteration
+response_tmax = 5.0
+mean_center = true
+impulse_tail_debias = true
+impulse_tail_taper = "hard"
+# Asymptotic interval [t_start, t_end] used to:
+# 1) estimate and debias impulse-response asymptotic offsets
+# 2) average heaviside responses for Jacobian extraction
+t_start = 2.0
+t_end = 5.0
+apply_score_correction = true
+divergence_mode = "hutchinson"
+divergence_eps = 0.03
+divergence_probes = 10
+score_device = "GPU:0"
+batch_size = 1024
+
+[responses.finite_difference]
+# Only used if methods.finite_difference = true
+nsamples = 120_000
+spinup = 2_000
+h_abs = [0.05, 0.02, 0.01, 0.002, 0.05]
+h_rel = 0.005
+seed_base = 50_000_000
+use_ensemble = true
+# Run more shorter trajectories so the refactored FD path fully occupies CPU
+# threads while reducing Monte Carlo noise in the sigma column.
+ensemble_trajectories = 36
+samples_per_trajectory = 6_000
+save_every = 200
+parallel_trajectories = true
+
+[acceptance_ensemble]
+# Lower-cost observable estimator used by the simplified improving-step update.
+# When require_improving_update = true, trial steps are screened with this
+# ensemble before the accepted parameter is recomputed with the full
+# observables_ensemble below.
+trajectories = 4
+samples_per_trajectory = 4_000
+save_every = 200
+spinup_steps = 1_000
+seed_base = 80_000_000
+parallel_trajectories = true
+# Refine acceptance only in the local phase, where 4x4000 can be too noisy.
+# Trigger when either the previous accepted full-ensemble residual is small
+# enough or the active UNet Jacobian is already ill-conditioned.
+refine_residual_threshold = 1.5
+refine_conditioning_threshold = 1e4
+refined_trajectories = 12
+refined_samples_per_trajectory = 10_000
+refined_save_every = 200
+refined_spinup_steps = 1_000
+refined_parallel_trajectories = true
+
+[observables_ensemble]
+# High-accuracy observable estimator used everywhere G(theta) is evaluated
+# inside the calibration loop: iteration-0 baseline, line-search acceptance,
+# post-check rollback, convergence diagnostics, and exported observable-gap
+# figures. These seeds are shared across runs so the estimator is reproducible.
+trajectories = 36
+samples_per_trajectory = 6_000
+save_every = 200
+spinup_steps = 2_000
+seed_base = 60_000_000
+parallel_trajectories = true
+
+[numerical]
+# Hard bounds applied to reduced stochastic L96 states during integration.
+state_min = -200.0
+state_max = 200.0
+# Maximum number of times a trajectory is allowed to hit either bound before
+# the current method is interrupted for this calibration run.
+max_boundary_hits = 200
+
+[figures]
+dpi = 180
+save_per_iteration = true   # save response + stats figures each iteration
+save_convergence = true     # save final convergence figure
+save_langevin_stats = true  # per-iteration figB-style: train stochastic vs score-Langevin
+langevin_device = "GPU:0"
+langevin_dt = 0.005
+langevin_resolution = 200
+langevin_nsteps = 12_000
+langevin_burn_in = 2_000
+langevin_ensembles = 128
+langevin_seed_base = 70_000_000
+langevin_use_boundary = true
+langevin_boundary_min = -200.0
+langevin_boundary_max = 200.0
+langevin_max_samples = 10_000
+langevin_pdf_bins = 80
+langevin_max_acf_lag = 200
+
+[performance]
+# High-performance execution controls.
+parallel_methods = false         # run heavy CPU methods sequentially so each one can use the full Julia thread pool
+max_parallel_methods = 1         # unused when parallel_methods = false
+parallel_fd_columns = true       # run FD Jacobian columns (parameters) in parallel
+parallel_line_search = true      # auto-disabled when G(theta) already parallelizes over trajectories
+max_parallel_line_search = 2     # cap concurrent line-search candidates
+allow_nested_parallel = false    # avoid nested CPU oversubscription; each active phase gets the full thread pool

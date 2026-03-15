@@ -1,0 +1,179 @@
+[observables_ensemble]
+samples_per_trajectory = 20
+save_every = 200
+spinup_steps = 50
+seed_base = 60000000
+parallel_trajectories = false
+trajectories = 2
+
+[figures]
+langevin_burn_in = 2000
+langevin_use_boundary = true
+langevin_boundary_min = -200.0
+langevin_nsteps = 12000
+langevin_device = "GPU:0"
+langevin_pdf_bins = 80
+langevin_dt = 0.005
+langevin_boundary_max = 200.0
+langevin_seed_base = 70000000
+langevin_max_acf_lag = 200
+dpi = 180
+langevin_max_samples = 10000
+save_per_iteration = false
+save_convergence = true
+langevin_ensembles = 128
+langevin_resolution = 200
+save_langevin_stats = false
+
+[training]
+epochs = 10
+device = "GPU:0"
+resume_from_previous = true
+
+[calibration]
+max_iterations = 1
+apply_sigma_jacobian_mask = false
+weight_matrix = "identity"
+postcheck_rel_tol = 0.05
+conditioning_step_threshold = 10000.0
+max_relative_step = 0.0
+line_search = true
+line_search_max = 2
+tol_theta = 0.001
+lm_max_attempts = 4
+freeze_steps = 0
+backtracking_scales = [1.0, 0.5, 0.25]
+freeze_parameters = []
+tol_obs = 0.005
+postcheck_abs_tol = 0.001
+free_parameters = [1, 2, 3, 4, 5]
+min_actual_to_predicted_ratio = 0.1
+conditioned_max_relative_step = 0.05
+lm_growth_factor = 10.0
+require_improving_update = true
+damping = 1.0
+convergence_scope = "primary"
+regularization_gamma = 0.01
+active_observables = [1, 2, 3, 4, 5, 6, 8, 10, 14, 20]
+
+[truth]
+spinup_steps = 100
+rng_seed = 123
+save_every = 200
+nsamples = 100
+source = "two_scale"
+
+[twoscale]
+J = 10
+c = 10.0
+process_noise_sigma_y = 0.0
+b = 10.0
+process_noise_sigma_x = 1.0
+dt = 0.005
+K = 36
+h = 1.0
+F = 10.0
+
+[initial_theta]
+sigma = 0.41443993804139906
+alpha2 = 0.011016434610840226
+alpha1 = 0.3660714354042205
+alpha3 = -0.0019401319945469076
+alpha0 = 0.04636738678495637
+perturbation_fraction = 0.0
+
+[methods]
+unet = false
+finite_difference = false
+gaussian = true
+
+[acceptance_ensemble]
+refined_spinup_steps = 50
+refined_samples_per_trajectory = 20
+seed_base = 80000000
+refine_residual_threshold = 1.5
+trajectories = 1
+samples_per_trajectory = 20
+spinup_steps = 50
+parallel_trajectories = false
+refine_conditioning_threshold = 10000.0
+save_every = 200
+refined_parallel_trajectories = false
+refined_trajectories = 1
+refined_save_every = 200
+
+[responses]
+batch_size = 1024
+t_end = 0.08
+t_start = 0.02
+impulse_tail_debias = true
+divergence_mode = "hutchinson"
+divergence_eps = 0.03
+impulse_tail_taper = "hard"
+response_tmax = 0.1
+mean_center = true
+divergence_probes = 10
+apply_score_correction = true
+score_device = "GPU:0"
+
+    [responses.finite_difference]
+    ensemble_trajectories = 36
+    samples_per_trajectory = 6000
+    save_every = 200
+    h_abs = [0.05, 0.02, 0.01, 0.002, 0.05]
+    nsamples = 120000
+    h_rel = 0.005
+    seed_base = 50000000
+    use_ensemble = true
+    parallel_trajectories = true
+    spinup = 2000
+
+[observables]
+m = 18
+
+[numerical]
+state_min = -200.0
+state_max = 200.0
+max_boundary_hits = 200
+
+[run]
+seed_stride = 1000000000
+seed_offset = 0
+run_id_padding = 3
+
+[performance]
+parallel_line_search = false
+allow_nested_parallel = false
+max_parallel_line_search = 2
+parallel_methods = false
+max_parallel_methods = 2
+parallel_fd_columns = true
+
+[paths]
+responses_params = "scripts/arnold/parameters_responses.toml"
+data_params = "scripts/arnold/parameters_data.toml"
+train_params = "scripts/arnold/parameters_train.toml"
+runs_root = "scripts/arnold/runs_calibration"
+
+[closure]
+alpha2_initial = 0.011016434610840226
+fit_dataset_role = "two_scale_fit"
+fit_samples = 50000
+fit_min_samples = 500
+alpha3_initial = -0.0019401319945469076
+fit_start_index = 2
+alpha1_initial = 0.3660714354042205
+auto_fit = true
+alpha0_initial = 0.04636738678495637
+sigma_initial = 0.41443993804139906
+F = 10.0
+
+[datasets]
+gfdt_rng_seed_base = 3000
+train_nsamples = 100
+train_rng_seed_base = 2000
+train_parallel_trajectories = true
+gfdt_save_every = 2
+gfdt_nsamples = 600
+train_save_every = 200
+train_ensemble_trajectories = 24

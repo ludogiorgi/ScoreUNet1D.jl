@@ -1,21 +1,37 @@
 #!/usr/bin/env julia
 
-if isempty(get(ENV, "GKSwstype", ""))
-    ENV["GKSwstype"] = "100"
-end
-
+using GLMakie
 using HDF5
 using LaTeXStrings
-using Plots
-using Printf
 using TOML
 
+try
+    using CairoMakie
+catch
+end
+
+GLMakie.activate!()
+
 const DEFAULT_PARAMS = joinpath(@__DIR__, "parameters_publication_calibration_figures.toml")
-const METHOD_ORDER = ("unet", "gaussian", "finite_difference")
-const METHOD_STYLE = Dict(
-    "unet" => (label="UNet", color=:orangered3, linestyle=:solid, marker=:circle, markersize=6),
-    "gaussian" => (label="Gaussian", color=:black, linestyle=:dash, marker=:utriangle, markersize=6),
-    "finite_difference" => (label="Finite difference", color=:dodgerblue3, linestyle=:solid, marker=:diamond, markersize=6),
+const PANEL_BG = RGBAf(1, 1, 1, 1)
+const FIG_BG = RGBAf(1, 1, 1, 1)
+
+const METHOD_COLORS = Dict(
+    :finite_difference => :darkorange,
+    :gaussian => :black,
+    :unet => :steelblue,
+)
+
+const METHOD_LABELS = Dict(
+    :finite_difference => "Finite diff",
+    :gaussian => "Gaussian",
+    :unet => "UNet",
+)
+
+const METHOD_LINESTYLES = Dict(
+    :finite_difference => nothing,
+    :gaussian => :dash,
+    :unet => nothing,
 )
 
 function parse_args(args::Vector{String})
@@ -52,8 +68,8 @@ function maybe_table(doc::Dict{String,Any}, key::String)
 end
 
 as_int(tbl::Dict{String,Any}, key::String, default) = Int(get(tbl, key, default))
-as_float(tbl::Dict{String,Any}, key::String, default) = Float64(get(tbl, key, default))
 as_str(tbl::Dict{String,Any}, key::String, default) = String(get(tbl, key, default))
+as_float(tbl::Dict{String,Any}, key::String, default) = Float64(get(tbl, key, default))
 
 function load_plot_config(path::String)
     isfile(path) || error("Plot parameter file not found: $path")
@@ -64,35 +80,63 @@ function load_plot_config(path::String)
 
     run_dir = abspath(as_str(input_tbl, "run_dir", ""))
     isempty(run_dir) && error("[input].run_dir must be provided")
-
     default_output = joinpath(run_dir, "publication_figures")
-    output_dir = abspath(as_str(output_tbl, "output_dir", default_output))
 
     return Dict(
-        "params_path" => path,
         "run_dir" => run_dir,
-        "output_dir" => output_dir,
+        "output_dir" => abspath(as_str(output_tbl, "output_dir", default_output)),
         "convergence_basename" => as_str(output_tbl, "convergence_basename", "calibration_convergence_publication"),
         "gap_basename" => as_str(output_tbl, "gap_basename", "observable_gap_norm_publication"),
-        "dpi" => as_int(style_tbl, "dpi", 300),
-        "fontfamily" => as_str(style_tbl, "fontfamily", "Computer Modern"),
-        "convergence_width" => as_int(style_tbl, "convergence_width", 3200),
-        "convergence_height" => as_int(style_tbl, "convergence_height", 2100),
-        "gap_width" => as_int(style_tbl, "gap_width", 1800),
-        "gap_height" => as_int(style_tbl, "gap_height", 980),
-        "line_width" => as_float(style_tbl, "line_width", 2.8),
-        "reference_line_width" => as_float(style_tbl, "reference_line_width", 1.8),
-        "marker_size" => as_float(style_tbl, "marker_size", 6.5),
-        "title_font_size" => as_int(style_tbl, "title_font_size", 13),
-        "guide_font_size" => as_int(style_tbl, "guide_font_size", 12),
-        "tick_font_size" => as_int(style_tbl, "tick_font_size", 10),
-        "legend_font_size" => as_int(style_tbl, "legend_font_size", 11),
+        "fontfamily" => as_str(style_tbl, "fontfamily", "Helvetica"),
+        "basefontsize" => as_int(style_tbl, "basefontsize", 34),
+        "ticksize" => as_int(style_tbl, "ticksize", 26),
+        "linewidth" => as_float(style_tbl, "linewidth", 4.0),
+        "target_linewidth" => as_float(style_tbl, "target_linewidth", 1.8),
+        "convergence_panel_width" => as_int(style_tbl, "convergence_panel_width", 520),
+        "convergence_panel_height" => as_int(style_tbl, "convergence_panel_height", 360),
+        "gap_width" => as_int(style_tbl, "gap_width", 2200),
+        "gap_height" => as_int(style_tbl, "gap_height", 1250),
+        "px_per_unit" => as_float(style_tbl, "px_per_unit", 2.0),
+        "gap_max_iteration" => as_int(style_tbl, "gap_max_iteration", -1),
     )
 end
 
-function method_order(methods::Vector{String})
-    ordered = String[]
-    for method in METHOD_ORDER
+function publication_theme(; basefontsize::Int=40, fontname::String="Helvetica", ticksize::Int=30)
+    Theme(
+        fontsize=basefontsize,
+        font=fontname,
+        backgroundcolor=FIG_BG,
+        Axis=(
+            backgroundcolor=PANEL_BG,
+            xlabelsize=basefontsize,
+            ylabelsize=basefontsize,
+            titlesize=basefontsize + 6,
+            titlealign=:center,
+            xgridvisible=false,
+            ygridvisible=false,
+            xticklabelsize=ticksize,
+            yticklabelsize=ticksize,
+            spinewidth=1.1,
+            topspinevisible=false,
+            rightspinevisible=false,
+            minorticksvisible=false,
+            xautolimitmargin=(0.06f0, 0.06f0),
+            yautolimitmargin=(0.10f0, 0.10f0),
+        ),
+        Legend=(
+            framevisible=true,
+            patchsize=(28, 18),
+            labelsize=basefontsize - 8,
+            titlegap=6,
+            padding=(12, 12, 12, 12),
+        ),
+    )
+end
+
+function method_order(methods::Vector{Symbol})
+    preferred = [:finite_difference, :gaussian, :unet]
+    ordered = Symbol[]
+    for method in preferred
         method in methods && push!(ordered, method)
     end
     for method in sort(methods)
@@ -105,344 +149,219 @@ function load_run_history(run_dir::String)
     history_path = joinpath(run_dir, "history", "calibration_history.hdf5")
     isfile(history_path) || error("Calibration history not found: $history_path")
 
-    cfg_path = joinpath(run_dir, "config", "parameters_calibration.toml")
-    isfile(cfg_path) || error("Copied calibration config not found: $cfg_path")
-    run_cfg = TOML.parsefile(cfg_path)
-
     out = Dict{String,Any}()
-    out["history_path"] = history_path
-    out["run_cfg"] = run_cfg
-
     h5open(history_path, "r") do h5
-        methods = String.(vec(read(h5["meta/enabled_methods"])))
+        methods = Symbol.(String.(vec(read(h5["meta/enabled_methods"]))))
         out["methods"] = method_order(methods)
-        out["param_names"] = String.(vec(read(h5["meta/param_names"])))
-        out["observable_names"] = String.(vec(read(h5["meta/observable_names"])))
-        out["target_observables"] = vec(Float64.(read(h5["target_observables"])))
+        out["target_observables"] = Float64.(vec(read(h5["target_observables"])))
         out["free_parameters"] = Int.(vec(read(h5["selection/base_free_parameters"])))
         out["active_observables"] = Int.(vec(read(h5["selection/base_active_observables"])))
 
-        theta_history = Dict{String,Matrix{Float64}}()
-        observable_history = Dict{String,Matrix{Float64}}()
-        gap_iterations = Dict{String,Vector{Int}}()
-        gap_values = Dict{String,Vector{Float64}}()
+        theta_history = Dict{Symbol,Matrix{Float64}}()
+        observable_history = Dict{Symbol,Matrix{Float64}}()
+        gap_iterations = Dict{Symbol,Vector{Int}}()
+        gap_values = Dict{Symbol,Vector{Float64}}()
         for method in out["methods"]
-            theta_history[method] = Array{Float64}(read(h5["theta_history/$method"]))
-            observable_history[method] = Array{Float64}(read(h5["observable_history/$method"]))
-            gap_iterations[method] = Int.(vec(read(h5["observable_gap_history/$method/iterations"])))
-            gap_values[method] = Float64.(vec(read(h5["observable_gap_history/$method/values"])))
+            theta_history[method] = Array{Float64}(read(h5["theta_history/$(String(method))"]))
+            observable_history[method] = Array{Float64}(read(h5["observable_history/$(String(method))"]))
+            gap_iterations[method] = Int.(vec(read(h5["observable_gap_history/$(String(method))/iterations"])))
+            gap_values[method] = Float64.(vec(read(h5["observable_gap_history/$(String(method))/values"])))
         end
         out["theta_history"] = theta_history
         out["observable_history"] = observable_history
         out["gap_iterations"] = gap_iterations
         out["gap_values"] = gap_values
     end
-
     return out
 end
 
-function closure_reference(run_cfg::Dict{String,Any})
-    closure_tbl = require_table(run_cfg, "closure")
-    return Float64[
-        get(closure_tbl, "alpha0_initial", get(closure_tbl, "alpha0", 0.0)),
-        get(closure_tbl, "alpha1_initial", get(closure_tbl, "alpha1", 0.0)),
-        get(closure_tbl, "alpha2_initial", get(closure_tbl, "alpha2", 0.0)),
-        get(closure_tbl, "alpha3_initial", get(closure_tbl, "alpha3", 0.0)),
-        get(closure_tbl, "sigma_initial", get(closure_tbl, "sigma", 0.0)),
-    ]
-end
-
-function padded_limits(values::Vector{Float64}; frac::Float64=0.08)
-    finite_vals = [v for v in values if isfinite(v)]
-    isempty(finite_vals) && return (-1.0, 1.0)
-    lo = minimum(finite_vals)
-    hi = maximum(finite_vals)
-    if isapprox(lo, hi; atol=1e-12, rtol=1e-9)
-        span = max(abs(lo), 1.0)
-        return (lo - frac * span, hi + frac * span)
+function param_title(idx::Int)
+    if idx == 5
+        return L"\sigma"
     end
-    pad = frac * (hi - lo)
-    return (lo - pad, hi + pad)
+    return latexstring("\\alpha_{$(idx - 1)}")
 end
 
-function padded_xlimits(xs::Vector{Int}; frac::Float64=0.035)
-    isempty(xs) && return (-0.5, 0.5)
-    lo = minimum(xs)
-    hi = maximum(xs)
-    span = max(hi - lo, 1)
-    pad = frac * span
-    return (lo - pad, hi + pad)
-end
+observable_title(idx::Int) = latexstring("\\phi_{$idx}")
 
-function xtick_values(nmax::Int)
-    nmax <= 6 && return collect(0:nmax)
-    step = nmax <= 10 ? 2 : max(2, ceil(Int, nmax / 6))
-    ticks = collect(0:step:nmax)
-    last(ticks) == nmax || push!(ticks, nmax)
-    return ticks
-end
-
-param_title(idx::Int) = idx == 5 ? latexstring("\\sigma") : latexstring("\\alpha_{$(idx - 1)}")
-
-function observable_title(obs_idx::Int)
-    if obs_idx == 1
-        return latexstring("\\phi_{1} = \\langle X_k \\rangle")
-    elseif obs_idx == 2
-        return latexstring("\\phi_{2} = \\langle X_k^2 \\rangle")
-    end
-    lag = obs_idx - 2
-    return latexstring("\\phi_{$obs_idx} = \\langle X_k X_{k+$lag} \\rangle")
-end
-
-function make_base_plot(style_cfg::Dict{String,Any}; size::Tuple{Int,Int})
-    default(
-        fontfamily=style_cfg["fontfamily"],
-        dpi=style_cfg["dpi"],
-        legendfontsize=style_cfg["legend_font_size"],
-        guidefontsize=style_cfg["guide_font_size"],
-        tickfontsize=style_cfg["tick_font_size"],
-        titlefontsize=style_cfg["title_font_size"],
-        linewidth=style_cfg["line_width"],
-        markerstrokewidth=0.8,
-        framestyle=:box,
-        grid=:y,
-        gridalpha=0.18,
-        foreground_color_grid=:gray75,
-        foreground_color_subplot=:black,
-        background_color=:white,
-        background_color_inside=:white,
-        background_color_outside=:white,
-        background_color_legend=:white,
-        size=size,
-    )
-end
-
-function build_parameter_panel(history::Dict{String,Matrix{Float64}},
-    methods::Vector{String},
-    pidx::Int,
-    reference_value::Float64,
-    style_cfg::Dict{String,Any};
-    show_legend::Bool=false,
-    show_xlabel::Bool=false,
-    show_ylabel::Bool=false)
-    xs = collect(0:(size(first(values(history)), 1) - 1))
-    plt = plot(
-        xlabel=show_xlabel ? "Iteration" : "",
-        ylabel=show_ylabel ? "Parameter value" : "",
-        title=param_title(pidx),
-        legend=show_legend ? :topright : false,
-        titleloc=:center,
-        xticks=xtick_values(last(xs)),
-        tickdirection=:out,
-        top_margin=3Plots.mm,
-    )
-
-    all_vals = Float64[]
+function add_method_lines!(ax::Axis, methods::Vector{Symbol}, series_lookup::Function;
+    linewidth::Real,
+    collect_legend::Bool=false,
+    legend_lines=Makie.AbstractPlot[],
+    legend_labels=String[])
+    seen = Set{Symbol}()
     for method in methods
-        ys = history[method][:, pidx]
-        append!(all_vals, ys)
-        style = METHOD_STYLE[method]
-        plot!(
-            plt,
+        ys = series_lookup(method)
+        xs = collect(0:(length(ys) - 1))
+        plt = lines!(
+            ax,
             xs,
             ys;
-            color=style.color,
-            linestyle=style.linestyle,
-            marker=style.marker,
-            markersize=style_cfg["marker_size"],
-            label=style.label,
+            color=METHOD_COLORS[method],
+            linewidth=linewidth,
+            linestyle=METHOD_LINESTYLES[method],
         )
+        if collect_legend && !(method in seen)
+            push!(legend_lines, plt)
+            push!(legend_labels, METHOD_LABELS[method])
+            push!(seen, method)
+        end
     end
-    ylims!(plt, padded_limits(all_vals))
-    xlims!(plt, padded_xlimits(xs))
-    return plt
+    return nothing
 end
 
-function build_observable_panel(history::Dict{String,Matrix{Float64}},
-    methods::Vector{String},
-    obs_idx::Int,
-    target_value::Float64,
-    style_cfg::Dict{String,Any};
-    show_legend::Bool=false,
-    show_xlabel::Bool=false,
-    show_ylabel::Bool=false)
-    xs = collect(0:(size(first(values(history)), 1) - 1))
-    plt = plot(
-        xlabel=show_xlabel ? "Iteration" : "",
-        ylabel=show_ylabel ? "Observable value" : "",
-        title=observable_title(obs_idx),
-        legend=show_legend ? :topright : false,
-        titleloc=:center,
-        xticks=xtick_values(last(xs)),
-        tickdirection=:out,
-        top_margin=3Plots.mm,
-    )
-
-    all_vals = Float64[target_value]
-    for method in methods
-        ys = history[method][:, obs_idx]
-        append!(all_vals, ys)
-        style = METHOD_STYLE[method]
-        plot!(
-            plt,
-            xs,
-            ys;
-            color=style.color,
-            linestyle=style.linestyle,
-            marker=style.marker,
-            markersize=style_cfg["marker_size"],
-            label=style.label,
-        )
-    end
-    hline!(
-        plt,
-        [target_value];
-        color=:gray35,
-        linestyle=:dash,
-        linewidth=style_cfg["reference_line_width"],
-        label=show_legend ? "Target" : "",
-    )
-    ylims!(plt, padded_limits(all_vals))
-    xlims!(plt, padded_xlimits(xs))
-    return plt
-end
-
-function save_plot_pair(fig, basepath::String)
+function save_pub(basepath::String, fig; px::Real=2)
     png_path = basepath * ".png"
-    pdf_path = basepath * ".pdf"
     mkpath(dirname(basepath))
-    savefig(fig, png_path)
-    savefig(fig, pdf_path)
+    save(png_path, fig; px_per_unit=px)
+    pdf_path = ""
     return (png=png_path, pdf=pdf_path)
 end
 
-function build_convergence_figure(history_data::Dict{String,Any}, plot_cfg::Dict{String,Any})
-    methods = history_data["methods"]
-    theta_history = history_data["theta_history"]
-    obs_history = history_data["observable_history"]
-    free_parameters = history_data["free_parameters"]
-    active_observables = history_data["active_observables"]
-    target = history_data["target_observables"]
-    reference = closure_reference(history_data["run_cfg"])
+function build_convergence_figure(history::Dict{String,Any}, cfg::Dict{String,Any})
+    methods = history["methods"]
+    theta_history = history["theta_history"]
+    observable_history = history["observable_history"]
+    free_parameters = history["free_parameters"]
+    active_observables = history["active_observables"]
+    target = history["target_observables"]
 
-    length(free_parameters) == 5 || error("Publication convergence figure expects exactly 5 free parameters, got $(length(free_parameters))")
-    length(active_observables) <= 10 || error("Publication convergence figure expects at most 10 active observables, got $(length(active_observables))")
+    length(free_parameters) == 5 || error("Expected 5 free parameters, got $(length(free_parameters))")
+    length(active_observables) == 10 || error("Expected 10 active observables, got $(length(active_observables))")
 
-    make_base_plot(plot_cfg; size=(plot_cfg["convergence_width"], plot_cfg["convergence_height"]))
+    local_theme = publication_theme(basefontsize=cfg["basefontsize"], fontname=cfg["fontfamily"], ticksize=cfg["ticksize"])
+    return with_theme(local_theme) do
+        fig = Figure(size=(5 * cfg["convergence_panel_width"], 3 * cfg["convergence_panel_height"] + 180))
+        top = fig[1, 1] = GridLayout(tellwidth=false)
+        mid = fig[2, 1] = GridLayout(tellwidth=false)
+        bot = fig[3, 1] = GridLayout(tellwidth=false)
 
-    obs_slots = vcat(active_observables, fill(0, max(0, 10 - length(active_observables))))
-    panels = Any[]
-    for col in 1:5
-        push!(
-            panels,
-            build_parameter_panel(
-                theta_history,
-                methods,
-                free_parameters[col],
-                reference[free_parameters[col]],
-                plot_cfg;
-                show_legend=(col == 1),
-                show_xlabel=false,
-                show_ylabel=(col == 1),
-            ),
-        )
-    end
+        legend_lines = Makie.AbstractPlot[]
+        legend_labels = String[]
+        seen = Set{Symbol}()
 
-    for row in 1:2
         for col in 1:5
-            obs_idx = obs_slots[(row - 1) * 5 + col]
-            if obs_idx == 0
-                push!(panels, plot(axis=false, grid=false, ticks=false, border=false))
-                continue
+            pidx = free_parameters[col]
+            ax = Axis(top[1, col], xlabel="", ylabel=col == 1 ? "θᵢ" : "", title=param_title(pidx))
+            for method in methods
+                ys = theta_history[method][:, pidx]
+                xs = collect(0:(length(ys) - 1))
+                plt = lines!(
+                    ax,
+                    xs,
+                    ys;
+                    color=METHOD_COLORS[method],
+                    linewidth=cfg["linewidth"],
+                    linestyle=METHOD_LINESTYLES[method],
+                )
+                if !(method in seen)
+                    push!(legend_lines, plt)
+                    push!(legend_labels, METHOD_LABELS[method])
+                    push!(seen, method)
+                end
             end
-            push!(
-                panels,
-                build_observable_panel(
-                    obs_history,
-                    methods,
-                    obs_idx,
-                    target[obs_idx],
-                    plot_cfg;
-                    show_legend=false,
-                    show_xlabel=(row == 2),
-                    show_ylabel=(col == 1),
-                ),
-            )
+            tightlimits!(ax)
         end
-    end
 
-    fig = plot(
-        panels...;
-        layout=grid(3, 5, heights=[0.34, 0.33, 0.33]),
-        size=(plot_cfg["convergence_width"], plot_cfg["convergence_height"]),
-        left_margin=15Plots.mm,
-        right_margin=8Plots.mm,
-        top_margin=11Plots.mm,
-        bottom_margin=10Plots.mm,
-    )
-    return save_plot_pair(fig, joinpath(plot_cfg["output_dir"], plot_cfg["convergence_basename"]))
+        for col in 1:5
+            obs_idx = active_observables[col]
+            ax = Axis(mid[1, col], xlabel="", ylabel=col == 1 ? "Aᵢ" : "", title=observable_title(obs_idx))
+            hlines!(ax, [target[obs_idx]]; color=:gray55, linestyle=:dot, linewidth=cfg["target_linewidth"])
+            for method in methods
+                ys = observable_history[method][:, obs_idx]
+                xs = collect(0:(length(ys) - 1))
+                lines!(
+                    ax,
+                    xs,
+                    ys;
+                    color=METHOD_COLORS[method],
+                    linewidth=cfg["linewidth"],
+                    linestyle=METHOD_LINESTYLES[method],
+                )
+            end
+            tightlimits!(ax)
+        end
+
+        for col in 1:5
+            obs_idx = active_observables[col + 5]
+            ax = Axis(bot[1, col], xlabel="iteration", ylabel=col == 1 ? "Aᵢ" : "", title=observable_title(obs_idx))
+            hlines!(ax, [target[obs_idx]]; color=:gray55, linestyle=:dot, linewidth=cfg["target_linewidth"])
+            for method in methods
+                ys = observable_history[method][:, obs_idx]
+                xs = collect(0:(length(ys) - 1))
+                lines!(
+                    ax,
+                    xs,
+                    ys;
+                    color=METHOD_COLORS[method],
+                    linewidth=cfg["linewidth"],
+                    linestyle=METHOD_LINESTYLES[method],
+                )
+            end
+            tightlimits!(ax)
+        end
+
+        leg = Legend(fig, legend_lines, legend_labels; orientation=:horizontal, framevisible=true, tellwidth=false)
+        leg.halign = :center
+        fig[4, 1] = leg
+
+        save_pub(joinpath(cfg["output_dir"], cfg["convergence_basename"]), fig; px=cfg["px_per_unit"])
+    end
 end
 
-function build_gap_figure(history_data::Dict{String,Any}, plot_cfg::Dict{String,Any})
-    methods = history_data["methods"]
-    gap_iterations = history_data["gap_iterations"]
-    gap_values = history_data["gap_values"]
+function build_gap_figure(history::Dict{String,Any}, cfg::Dict{String,Any})
+    methods = history["methods"]
+    gap_iterations = history["gap_iterations"]
+    gap_values = history["gap_values"]
+    max_iter = cfg["gap_max_iteration"]
 
-    make_base_plot(plot_cfg; size=(plot_cfg["gap_width"], plot_cfg["gap_height"]))
-
-    plt = plot(
-        xlabel="Iteration",
-        ylabel=L"\mathcal{E}^{(n)} = \| G(\theta^{(n)}) - A \|",
-        title=L"\mathcal{E}^{(n)}",
-        legend=:topright,
-        framestyle=:box,
-        grid=:both,
-        gridalpha=0.18,
-        tickdirection=:out,
-        top_margin=4Plots.mm,
-    )
-
-    all_vals = Float64[]
-    xmax = 0
-    for method in methods
-        xs = gap_iterations[method]
-        ys = gap_values[method]
-        append!(all_vals, ys)
-        xmax = max(xmax, isempty(xs) ? 0 : maximum(xs))
-        style = METHOD_STYLE[method]
-        plot!(
-            plt,
-            xs,
-            ys;
-            color=style.color,
-            linestyle=style.linestyle,
-            marker=style.marker,
-            markersize=plot_cfg["marker_size"],
-            label=style.label,
+    local_theme = publication_theme(basefontsize=cfg["basefontsize"], fontname=cfg["fontfamily"], ticksize=cfg["ticksize"])
+    return with_theme(local_theme) do
+        fig = Figure(size=(cfg["gap_width"], cfg["gap_height"]))
+        ax = Axis(
+            fig[1, 1],
+            xlabel="iteration",
+            ylabel=L"\mathcal{E}^{(n)} = \Vert G(\theta^{(n)}) - A \Vert_2",
+            title=L"\mathcal{E}^{(n)}",
         )
-    end
 
-    xlims!(plt, padded_xlimits(vcat([0], [xmax]); frac=0.05))
-    ylims!(plt, padded_limits(all_vals; frac=0.09))
-    xticks!(plt, xtick_values(xmax))
-    plot!(
-        plt;
-        left_margin=22Plots.mm,
-        right_margin=9Plots.mm,
-        top_margin=10Plots.mm,
-        bottom_margin=10Plots.mm,
-    )
-    return save_plot_pair(plt, joinpath(plot_cfg["output_dir"], plot_cfg["gap_basename"]))
+        legend_lines = Makie.AbstractPlot[]
+        legend_labels = String[]
+        for method in methods
+            xs_full = gap_iterations[method]
+            ys_full = gap_values[method]
+            keep = max_iter < 0 ? eachindex(xs_full) : findall(x -> x <= max_iter, xs_full)
+            xs = xs_full[keep]
+            ys = ys_full[keep]
+            plt = lines!(
+                ax,
+                xs,
+                ys;
+                color=METHOD_COLORS[method],
+                linewidth=cfg["linewidth"],
+                linestyle=METHOD_LINESTYLES[method],
+            )
+            push!(legend_lines, plt)
+            push!(legend_labels, METHOD_LABELS[method])
+        end
+        tightlimits!(ax)
+
+        leg = Legend(fig, legend_lines, legend_labels; orientation=:horizontal, framevisible=true, tellwidth=false)
+        leg.halign = :center
+        fig[2, 1] = leg
+
+        save_pub(joinpath(cfg["output_dir"], cfg["gap_basename"]), fig; px=cfg["px_per_unit"])
+    end
 end
 
 function main(args=ARGS)
     params_path = parse_args(args)
-    plot_cfg = load_plot_config(params_path)
-    history_data = load_run_history(plot_cfg["run_dir"])
-    mkpath(plot_cfg["output_dir"])
+    cfg = load_plot_config(params_path)
+    history = load_run_history(cfg["run_dir"])
+    mkpath(cfg["output_dir"])
 
-    convergence_paths = build_convergence_figure(history_data, plot_cfg)
-    gap_paths = build_gap_figure(history_data, plot_cfg)
+    convergence_paths = build_convergence_figure(history, cfg)
+    gap_paths = build_gap_figure(history, cfg)
 
     println("Saved convergence figure PNG: ", convergence_paths.png)
     println("Saved convergence figure PDF: ", convergence_paths.pdf)

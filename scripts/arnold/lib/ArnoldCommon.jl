@@ -7,6 +7,7 @@ using LinearAlgebra
 using Printf
 using Random
 using SHA
+using Sockets
 using Statistics
 using TOML
 using Base.Threads
@@ -73,6 +74,65 @@ function _path_lock_dir(path::AbstractString)
     return String(path) * ".lockdir"
 end
 
+function _path_lock_owner_file(lock_dir::AbstractString)
+    return joinpath(String(lock_dir), "owner.toml")
+end
+
+function _write_lock_owner(lock_dir::AbstractString)
+    owner = Dict(
+        "pid" => getpid(),
+        "hostname" => gethostname(),
+        "created_at" => string(Dates.now()),
+        "path" => abspath(dirname(String(lock_dir))),
+    )
+    open(_path_lock_owner_file(lock_dir), "w") do io
+        TOML.print(io, owner)
+    end
+    return owner
+end
+
+function _pid_alive_local(pid::Integer)
+    pid > 0 || return false
+    return ispath(joinpath("/proc", string(pid)))
+end
+
+function _lock_is_stale(lock_dir::AbstractString; fallback_seconds::Float64=300.0)
+    isdir(lock_dir) || return false
+
+    owner_file = _path_lock_owner_file(lock_dir)
+    if isfile(owner_file)
+        try
+            owner = TOML.parsefile(owner_file)
+            pid = Int(get(owner, "pid", -1))
+            host = String(get(owner, "hostname", ""))
+            if host == gethostname() && !_pid_alive_local(pid)
+                return true
+            end
+        catch
+        end
+    end
+
+    # Recovery for legacy empty lock directories left behind by killed runs.
+    try
+        isempty(readdir(lock_dir)) || return false
+    catch
+        return false
+    end
+
+    age_seconds = time() - mtime(lock_dir)
+    return age_seconds > fallback_seconds
+end
+
+function _clear_stale_lock!(lock_dir::AbstractString)
+    _lock_is_stale(lock_dir) || return false
+    try
+        rm(lock_dir; recursive=true, force=true)
+        return true
+    catch
+        return false
+    end
+end
+
 function with_path_lock(path::AbstractString, f::Function; poll_seconds::Float64=0.25, timeout_seconds::Float64=14_400.0)
     lock_dir = _path_lock_dir(path)
     mkpath(dirname(lock_dir))
@@ -81,9 +141,11 @@ function with_path_lock(path::AbstractString, f::Function; poll_seconds::Float64
     while true
         try
             mkdir(lock_dir)
+            _write_lock_owner(lock_dir)
             break
         catch err
             if isdir(lock_dir)
+                _clear_stale_lock!(lock_dir) && continue
                 if time() - t0 > timeout_seconds
                     error("Timed out waiting for filesystem lock '$lock_dir'")
                 end
@@ -1309,6 +1371,137 @@ end
 # Observables and response helpers
 # -----------------------------------------------------------------------------
 
+function legacy_observable_names(m::Int)
+    m >= 0 || error("Observable lag parameter m must be >= 0")
+    names = String["mean_x", "mean_x2"]
+    for lag in 1:m
+        push!(names, "raw_xxp_lag$(lag)")
+    end
+    return names
+end
+
+function legacy_observable_labels(m::Int)
+    m >= 0 || error("Observable lag parameter m must be >= 0")
+    labels = String["<X_k>", "<X_k^2>"]
+    for lag in 1:m
+        push!(labels, "<X_k X_{k+$(lag)}>")
+    end
+    return labels
+end
+
+function observable_spec(name::AbstractString, K::Int)
+    key = lowercase(strip(String(name)))
+    if key == "mean_x"
+        return (name="mean_x", label="<X_k>", kind=:mean, lag=0)
+    elseif key == "mean_x2"
+        return (name="mean_x2", label="<X_k^2>", kind=:mean_x2, lag=0)
+    elseif key == "var_x"
+        return (name="var_x", label="Var(X_k)", kind=:var, lag=0)
+    elseif key in ("cm3_x", "centered_moment3_x")
+        return (name="centered_moment3_x", label="< (X_k-<X>)^3 >", kind=:cm3, lag=0)
+    elseif key in ("cm4_x", "centered_moment4_x")
+        return (name="centered_moment4_x", label="< (X_k-<X>)^4 >", kind=:cm4, lag=0)
+    elseif key == "skew_x"
+        return (name="skew_x", label="Skew(X_k)", kind=:skew, lag=0)
+    elseif key == "kurt_x"
+        return (name="kurt_x", label="ExcessKurt(X_k)", kind=:kurt, lag=0)
+    end
+
+    for (prefix, kind, label_fmt) in (
+        ("raw_xxp_lag", :raw_lag, lag -> "<X_k X_{k+$(lag)}>" ),
+        ("cov_x_lag", :cov_lag, lag -> "Cov(X_k,X_{k+$(lag)})" ),
+        ("corr_x_lag", :corr_lag, lag -> "Corr(X_k,X_{k+$(lag)})" ),
+    )
+        if startswith(key, prefix)
+            lag_text = key[(lastindex(prefix) + 1):end]
+            lag = try
+                parse(Int, lag_text)
+            catch
+                error("Invalid observable lag in '$name'")
+            end
+            1 <= lag <= K - 1 || error("Observable lag $(lag) in '$name' exceeds allowed range 1:$(K - 1)")
+            return (name="$(prefix)$(lag)", label=label_fmt(lag), kind=kind, lag=lag)
+        end
+    end
+
+    error("Unsupported observable name '$name'")
+end
+
+function observable_specs_from_names(names::Vector{String}, K::Int)
+    isempty(names) && error("Observable library must contain at least one observable")
+    specs = [observable_spec(name, K) for name in names]
+    spec_names = [spec.name for spec in specs]
+    length(unique(spec_names)) == length(spec_names) || error("Observable library contains duplicate names: $(join(spec_names, ", "))")
+    return specs
+end
+
+observable_names_from_specs(specs) = [spec.name for spec in specs]
+observable_labels_from_specs(specs) = [spec.label for spec in specs]
+
+function compute_observables_x(x::Vector{Float64}, observable_specs)
+    K = length(x)
+    n_obs = length(observable_specs)
+    invK = 1.0 / K
+    obs = zeros(Float64, n_obs)
+    mu = sum(x) * invK
+    raw2 = sum(abs2, x) * invK
+
+    need_centered = any(spec.kind in (:var, :cm3, :cm4, :skew, :kurt, :cov_lag, :corr_lag) for spec in observable_specs)
+    xc = need_centered ? x .- mu : Float64[]
+    var = need_centered ? sum(abs2, xc) * invK : max(raw2 - mu^2, 0.0)
+    cm3 = any(spec.kind in (:cm3, :skew) for spec in observable_specs) ? sum(v^3 for v in xc) * invK : 0.0
+    cm4 = any(spec.kind in (:cm4, :kurt) for spec in observable_specs) ? sum(v^4 for v in xc) * invK : 0.0
+    skew = var > eps(Float64) ? cm3 / (var^(1.5)) : 0.0
+    kurt = var > eps(Float64) ? cm4 / (var^2) - 3.0 : 0.0
+
+    for (i, spec) in enumerate(observable_specs)
+        kind = spec.kind
+        if kind == :mean
+            obs[i] = mu
+        elseif kind == :mean_x2
+            obs[i] = raw2
+        elseif kind == :var
+            obs[i] = var
+        elseif kind == :cm3
+            obs[i] = cm3
+        elseif kind == :cm4
+            obs[i] = cm4
+        elseif kind == :skew
+            obs[i] = skew
+        elseif kind == :kurt
+            obs[i] = kurt
+        elseif kind == :raw_lag
+            lag = spec.lag
+            acc = 0.0
+            @inbounds for k in 1:K
+                kp = mod1idx(k + lag, K)
+                acc += x[k] * x[kp]
+            end
+            obs[i] = acc * invK
+        elseif kind == :cov_lag
+            lag = spec.lag
+            acc = 0.0
+            @inbounds for k in 1:K
+                kp = mod1idx(k + lag, K)
+                acc += xc[k] * xc[kp]
+            end
+            obs[i] = acc * invK
+        elseif kind == :corr_lag
+            lag = spec.lag
+            acc = 0.0
+            @inbounds for k in 1:K
+                kp = mod1idx(k + lag, K)
+                acc += xc[k] * xc[kp]
+            end
+            cov = acc * invK
+            obs[i] = var > eps(Float64) ? cov / var : 0.0
+        else
+            error("Unsupported observable kind $(kind)")
+        end
+    end
+    return obs
+end
+
 function compute_observables_x(x::Vector{Float64},
     F::Float64,
     alpha0_ref::Float64,
@@ -1316,26 +1509,36 @@ function compute_observables_x(x::Vector{Float64},
     alpha2_ref::Float64,
     alpha3_ref::Float64,
     m::Int=3)
-    K = length(x)
-    m >= 0 || error("Observable lag parameter m must be >= 0")
-    m <= K - 1 || error("Observable lag parameter m=$(m) exceeds K-1=$(K-1)")
+    specs = observable_specs_from_names(legacy_observable_names(m), length(x))
+    return compute_observables_x(x, specs)
+end
 
-    n_obs = m + 2
-    invK = 1.0 / K
-    obs = zeros(Float64, n_obs)
+function compute_observables_x(x::Vector{Float64},
+    F::Float64,
+    alpha0_ref::Float64,
+    alpha1_ref::Float64,
+    alpha2_ref::Float64,
+    alpha3_ref::Float64,
+    observable_specs::Vector)
+    return compute_observables_x(x, observable_specs)
+end
 
-    @inbounds for k in 1:K
-        xk = x[k]
-        obs[1] += xk
-        obs[2] += xk * xk
-        for lag in 1:m
-            kp = mod1idx(k + lag, K)
-            obs[lag + 2] += xk * x[kp]
-        end
+function compute_observables_series(xseries::Array{Float64,2},
+    F::Float64,
+    alpha0_ref::Float64,
+    alpha1_ref::Float64,
+    alpha2_ref::Float64,
+    alpha3_ref::Float64,
+    observable_specs::Vector)
+    _, N = size(xseries)
+    n_obs = length(observable_specs)
+    out = Array{Float64}(undef, n_obs, N)
+    x = zeros(Float64, size(xseries, 1))
+    for n in 1:N
+        @inbounds x .= view(xseries, :, n)
+        out[:, n] .= compute_observables_x(x, observable_specs)
     end
-
-    obs .*= invK
-    return obs
+    return out
 end
 
 function compute_observables_series(xseries::Array{Float64,2},
@@ -1345,18 +1548,8 @@ function compute_observables_series(xseries::Array{Float64,2},
     alpha2_ref::Float64,
     alpha3_ref::Float64,
     m::Int=3)
-    K, N = size(xseries)
-    m >= 0 || error("Observable lag parameter m must be >= 0")
-    m <= K - 1 || error("Observable lag parameter m=$(m) exceeds K-1=$(K-1)")
-
-    n_obs = m + 2
-    out = Array{Float64}(undef, n_obs, N)
-    x = zeros(Float64, K)
-    for n in 1:N
-        @inbounds x .= view(xseries, :, n)
-        out[:, n] .= compute_observables_x(x, F, alpha0_ref, alpha1_ref, alpha2_ref, alpha3_ref, m)
-    end
-    return out
+    specs = observable_specs_from_names(legacy_observable_names(m), size(xseries, 1))
+    return compute_observables_series(xseries, F, alpha0_ref, alpha1_ref, alpha2_ref, alpha3_ref, specs)
 end
 
 function xcorr_one_sided_unbiased_fft(x::AbstractVector{<:Real},

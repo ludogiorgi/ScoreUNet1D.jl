@@ -1,0 +1,34 @@
+[paths]
+data_params = "/home/ludogio/Documents/JuliaProjects/ScoreUNet1D.jl/scripts/arnold/parameters_data.toml"
+
+[data]
+target_spacing = 1.0
+dataset_role = "train_stochastic"
+
+[train]
+lr = 0.0008
+use_lr_schedule = true
+min_lr_factor = 0.1
+resume_enabled = true
+batch_size = 1024
+loss_mean_weight = 0.0
+sigma = 0.02500000037252903
+device = "GPU:0"
+normalization_mode = "per_channel"
+progress = false
+accumulation_steps = 1
+periodic = true
+norm_type = "group"
+loss_cov_weight = 0.0
+kernel_size = 5
+norm_groups = 8
+base_channels = 32
+epoch_subset_size = 0
+epochs = 30
+max_steps_per_epoch = 0
+channel_multipliers = [1, 2]
+checkpoint_every = 10
+seed = 87000000042
+loss_weight = 1.0
+warmup_steps = 500
+shuffle = true

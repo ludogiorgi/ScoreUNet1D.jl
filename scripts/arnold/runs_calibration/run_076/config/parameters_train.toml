@@ -1,0 +1,39 @@
+[paths]
+data_params = "scripts/arnold/parameters_data.toml"
+
+[data]
+dataset_role = "train_stochastic"
+# Additional stride applied at load time to enforce strong decorrelation for NN training.
+target_spacing = 1.0
+
+[train]
+device = "GPU:0"
+seed = 42
+epochs = 100
+batch_size = 512
+lr = 0.0008
+sigma = 0.05
+base_channels = 32
+channel_multipliers = [1, 2]
+norm_type = "group"
+norm_groups = 8
+normalization_mode = "per_channel"
+progress = false
+use_lr_schedule = true
+warmup_steps = 500
+min_lr_factor = 0.1
+
+ema_enabled = true
+ema_decay = 0.999
+ema_use_for_eval = true
+
+checkpoint_every = 10
+save_state_every = 10
+
+resume_enabled = false
+resume_state_path = ""
+
+loss_weight = 1.0
+loss_mean_weight = 0.0
+loss_cov_weight = 0.0
+

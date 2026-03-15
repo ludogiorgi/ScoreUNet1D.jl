@@ -32,26 +32,12 @@ const N_PARAM = length(PARAM_NAMES)
 const ASYMPTOTIC_FD_NSAMPLES = 15_000_000
 const ASYMPTOTIC_FD_SPINUP = 2_000
 
-function observable_names(m::Int)
-    m >= 0 || error("Observable lag parameter m must be >= 0")
-    names = String["phi1_mean_x", "phi2_mean_x2"]
-    for lag in 1:m
-        push!(names, "phi$(lag + 2)_mean_x_xp$(lag)")
-    end
-    return names
-end
-
-function observable_labels(m::Int)
-    m >= 0 || error("Observable lag parameter m must be >= 0")
-    labels = String["phi1=<X_k>", "phi2=<X_k^2>"]
-    for lag in 1:m
-        push!(labels, "phi$(lag + 2)=<X_k X_{k+$(lag)}>")
-    end
-    return labels
-end
-
-observable_count(m::Int) = m + 2
-observable_count_from_cfg(cfg::Dict{String,Any}) = observable_count(Int(get(cfg, "observables.m", 3)))
+observable_names(m::Int) = ArnoldCommon.legacy_observable_names(m)
+observable_labels(m::Int) = ArnoldCommon.legacy_observable_labels(m)
+observable_names(cfg::Dict{String,Any}) = copy(String.(get(cfg, "observables.names", observable_names(Int(get(cfg, "observables.m", 3))))))
+observable_labels(cfg::Dict{String,Any}) = copy(String.(get(cfg, "observables.labels", observable_labels(Int(get(cfg, "observables.m", 3))))))
+observable_count(m::Int) = length(observable_names(m))
+observable_count_from_cfg(cfg::Dict{String,Any}) = Int(get(cfg, "observables.n", length(observable_names(cfg))))
 
 function parse_args(args::Vector{String})
     params_path = joinpath(@__DIR__, "parameters_responses.toml")
@@ -102,6 +88,7 @@ as_float(tbl::Dict{String,Any}, key::String, default) = Float64(get(tbl, key, de
 as_str(tbl::Dict{String,Any}, key::String, default) = String(get(tbl, key, default))
 as_bool(tbl::Dict{String,Any}, key::String, default) = parse_bool(get(tbl, key, default))
 as_float_vec(tbl::Dict{String,Any}, key::String, default) = Float64.(collect(get(tbl, key, default)))
+as_str_vec(tbl::Dict{String,Any}, key::String, default) = String.(collect(get(tbl, key, default)))
 
 function require_table(doc::Dict{String,Any}, key::String)
     haskey(doc, key) || error("Missing [$key] table")
@@ -139,6 +126,11 @@ function load_config(path::AbstractString)
     obs_m = as_int(observables_tbl, "m", as_int(gfdt, "m", 3))
     obs_m >= 0 || error("observables.m must be >= 0")
     obs_m <= data_cfg["twoscale.K"] - 1 || error("observables.m must be <= K-1")
+    obs_names_raw = as_str_vec(observables_tbl, "names", String[])
+    obs_names = isempty(obs_names_raw) ? ArnoldCommon.legacy_observable_names(obs_m) : obs_names_raw
+    obs_specs = ArnoldCommon.observable_specs_from_names(obs_names, data_cfg["twoscale.K"])
+    obs_names = ArnoldCommon.observable_names_from_specs(obs_specs)
+    obs_labels = ArnoldCommon.observable_labels_from_specs(obs_specs)
     dt_obs = dataset_role_spacing(data_cfg, gfdt_role)
     save_every = Int(round(dt_obs / data_cfg["twoscale.dt"]))
     save_every = max(save_every, 1)
@@ -176,7 +168,10 @@ function load_config(path::AbstractString)
         "observables.alpha2_ref" => obs_alpha2,
         "observables.alpha3_ref" => obs_alpha3,
         "observables.m" => obs_m,
-        "observables.n" => observable_count(obs_m),
+        "observables.names" => obs_names,
+        "observables.labels" => obs_labels,
+        "observables.specs" => obs_specs,
+        "observables.n" => length(obs_names),
         "observables.F_ref" => data_cfg["closure.F"], "methods.gaussian" => as_bool(methods, "gaussian", true),
         "methods.unet" => as_bool(methods, "unet", true),
         "methods.numerical" => as_bool(methods, "numerical", true),
@@ -529,17 +524,30 @@ function estimate_divergence_hutchinson(
     return div
 end
 
-function estimate_divergence_fd_axis(score_fun::Function, X::Matrix{Float64}; eps::Float64)
+function estimate_divergence_fd_axis(score_fun::Function, X::Matrix{Float64}; eps::Float64, batch_size::Int=size(X, 2))
     K, N = size(X)
     div = zeros(Float64, N)
+    batch_size >= 1 || error("batch_size must be >= 1")
 
-    for k in 1:K
-        E = zeros(Float64, K, N)
-        @inbounds E[k, :] .= 1.0
-        Splus = score_fun(X .+ eps .* E)
-        Sminus = score_fun(X .- eps .* E)
-        @inbounds for n in 1:N
-            div[n] += (Splus[k, n] - Sminus[k, n]) / (2eps)
+    for start in 1:batch_size:N
+        stop = min(start + batch_size - 1, N)
+        idx = start:stop
+        Xb = @view X[:, idx]
+        B = length(idx)
+
+        for k in 1:K
+            Xplus = Matrix{Float64}(Xb)
+            Xminus = Matrix{Float64}(Xb)
+            @inbounds for b in 1:B
+                Xplus[k, b] += eps
+                Xminus[k, b] -= eps
+            end
+
+            Splus = score_fun(Xplus)
+            Sminus = score_fun(Xminus)
+            @inbounds for b in 1:B
+                div[start + b - 1] += (Splus[k, b] - Sminus[k, b]) / (2eps)
+            end
         end
     end
 
@@ -677,14 +685,14 @@ function unet_conjugates(
             end
         else
             div_raw = if divergence_mode == "fd_axis"
-                estimate_divergence_fd_axis(score_fun_raw, X; eps=divergence_eps)
+                estimate_divergence_fd_axis(score_fun_raw, X; eps=divergence_eps, batch_size=batch_size)
             else
                 estimate_divergence_hutchinson(score_fun_raw, X; eps=divergence_eps, n_probes=divergence_probes, rng=rng, batch_size=batch_size)
             end
 
             div_corr = if apply_correction
                 if divergence_mode == "fd_axis"
-                    estimate_divergence_fd_axis(score_fun_corr, X; eps=divergence_eps)
+                    estimate_divergence_fd_axis(score_fun_corr, X; eps=divergence_eps, batch_size=batch_size)
                 else
                     estimate_divergence_hutchinson(score_fun_corr, X; eps=divergence_eps, n_probes=divergence_probes, rng=rng, batch_size=batch_size)
                 end
@@ -717,7 +725,7 @@ function observable_reference(cfg::Dict{String,Any})
         alpha1_ref=cfg["observables.alpha1_ref"],
         alpha2_ref=cfg["observables.alpha2_ref"],
         alpha3_ref=cfg["observables.alpha3_ref"],
-        m=Int(get(cfg, "observables.m", 3)),
+        specs=get(cfg, "observables.specs", ArnoldCommon.observable_specs_from_names(observable_names(cfg), cfg["integration.K"])),
     )
 end
 
@@ -729,7 +737,7 @@ function compute_observables_for_matrix(X::Matrix{Float64}, obs_ref)
         obs_ref.alpha1_ref,
         obs_ref.alpha2_ref,
         obs_ref.alpha3_ref,
-        obs_ref.m,
+        obs_ref.specs,
     )
 end
 
@@ -757,7 +765,7 @@ function simulate_observable_series!(
         obs_ref.alpha1_ref,
         obs_ref.alpha2_ref,
         obs_ref.alpha3_ref,
-        obs_ref.m,
+        obs_ref.specs,
     )
     if !all(isfinite, @view(out[:, 1]))
         return false
@@ -779,7 +787,7 @@ function simulate_observable_series!(
             obs_ref.alpha1_ref,
             obs_ref.alpha2_ref,
             obs_ref.alpha3_ref,
-            obs_ref.m,
+            obs_ref.specs,
         )
         if !all(isfinite, @view(out[:, lag+1]))
             return false
@@ -1039,7 +1047,7 @@ function compute_steady_state_observables(theta::NTuple{5,Float64},
                 obs_ref.alpha1_ref,
                 obs_ref.alpha2_ref,
                 obs_ref.alpha3_ref,
-                obs_ref.m,
+                obs_ref.specs,
             )
             if !all(isfinite, obs)
                 stable = false
@@ -1223,7 +1231,7 @@ function response_signature(cfg::Dict{String,Any})
             "alpha2_ref" => cfg["observables.alpha2_ref"],
             "alpha3_ref" => cfg["observables.alpha3_ref"],
             "m" => cfg["observables.m"],
-            "names" => observable_names(Int(cfg["observables.m"])),
+            "names" => observable_names(cfg),
             "n_observables" => observable_count_from_cfg(cfg),
         ),
         "gfdt" => Dict(
@@ -1559,7 +1567,8 @@ end
 
 function write_responses_csv(path::AbstractString,
     times::Vector{Float64},
-    responses::Dict{String,Array{Float64,3}})
+    responses::Dict{String,Array{Float64,3}};
+    observable_name_list::Union{Nothing,Vector{String}}=nothing)
     mkpath(dirname(path))
     open(path, "w") do io
         println(io, "method,observable,param,time,response")
@@ -1567,7 +1576,7 @@ function write_responses_csv(path::AbstractString,
             R = responses[name]
             n_obs = size(R, 1)
             n_param = size(R, 2)
-            obs_names = observable_names(max(n_obs - 2, 0))
+            obs_names = observable_name_list === nothing ? observable_names(max(n_obs - 2, 0)) : observable_name_list
             for i in 1:n_obs, j in 1:n_param, t in eachindex(times)
                 obs_name = i <= length(obs_names) ? obs_names[i] : "obs_$i"
                 param_name = j <= length(PARAM_NAMES) ? PARAM_NAMES[j] : "param_$j"
@@ -1835,6 +1844,7 @@ function main(args=ARGS)
         curves;
         asymptotic_curves=build_asymptotic_curves(curves, jacobian_asymptotes),
         title_text=title_text,
+        observable_row_labels=observable_labels(cfg),
         dpi=cfg["figures.dpi"],
     )
 
@@ -1850,6 +1860,7 @@ function main(args=ARGS)
             curves_raw;
             asymptotic_curves=build_asymptotic_curves(curves_raw, jacobian_asymptotes),
             title_text=title_text * " (raw)",
+            observable_row_labels=observable_labels(cfg),
             dpi=cfg["figures.dpi"],
         )
     end
@@ -1866,12 +1877,18 @@ function main(args=ARGS)
             curves_corr;
             asymptotic_curves=build_asymptotic_curves(curves_corr, jacobian_asymptotes),
             title_text=title_text * " (corrected)",
+            observable_row_labels=observable_labels(cfg),
             dpi=cfg["figures.dpi"],
         )
     end
 
     h5_path = write_responses_hdf5(joinpath(out_dir, "responses_$(obs_tag)_selected_methods.hdf5"), times_out, responses)
-    csv_path = write_responses_csv(joinpath(out_dir, "responses_$(obs_tag)_selected_methods.csv"), times_out, responses)
+    csv_path = write_responses_csv(
+        joinpath(out_dir, "responses_$(obs_tag)_selected_methods.csv"),
+        times_out,
+        responses;
+        observable_name_list=observable_names(cfg),
+    )
 
     summary = Dict{String,Any}(
         "run_id" => run_info.run_name,

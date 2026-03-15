@@ -78,13 +78,7 @@ function primary_method(cfg::Dict{String,Any})
 end
 
 function observable_names(cfg::Dict{String,Any})
-    m = Int(get(cfg, "observables.m", 3))
-    m >= 0 || error("observables.m must be >= 0")
-    out = String["phi1_mean_x", "phi2_mean_x2"]
-    for lag in 1:m
-        push!(out, "phi$(lag + 2)_mean_x_xp$(lag)")
-    end
-    return out
+    return copy(String.(get(cfg, "observables.names", CalibrationCommon.observable_names(Int(get(cfg, "observables.m", 3))))))
 end
 
 function theta_from_cfg(cfg::Dict{String,Any})
@@ -167,13 +161,56 @@ function init_state(theta0::Vector{Float64}, cfg::Dict{String,Any})
     )
 end
 
+function effective_train_doc(cfg::Dict{String,Any})
+    return Dict(
+        "paths" => Dict(
+            "data_params" => cfg["paths.data_params"],
+        ),
+        "data" => Dict(
+            "dataset_role" => "train_stochastic",
+            "target_spacing" => 1.0,
+        ),
+        "train" => Dict(
+            "device" => cfg["training.device"],
+            "seed" => cfg["training.seed"],
+            "epochs" => cfg["training.epochs"],
+            "batch_size" => cfg["training.batch_size"],
+            "lr" => cfg["training.lr"],
+            "sigma" => Float64(cfg["training.sigma"]),
+            "base_channels" => cfg["training.base_channels"],
+            "channel_multipliers" => Vector{Int}(cfg["training.channel_multipliers"]),
+            "kernel_size" => cfg["training.kernel_size"],
+            "periodic" => cfg["training.periodic"],
+            "norm_type" => cfg["training.norm_type"],
+            "norm_groups" => cfg["training.norm_groups"],
+            "normalization_mode" => cfg["training.normalization_mode"],
+            "shuffle" => cfg["training.shuffle"],
+            "progress" => cfg["training.progress"],
+            "max_steps_per_epoch" => cfg["training.max_steps_per_epoch"],
+            "accumulation_steps" => cfg["training.accumulation_steps"],
+            "epoch_subset_size" => cfg["training.epoch_subset_size"],
+            "use_lr_schedule" => cfg["training.use_lr_schedule"],
+            "warmup_steps" => cfg["training.warmup_steps"],
+            "min_lr_factor" => cfg["training.min_lr_factor"],
+            "checkpoint_every" => cfg["training.checkpoint_every"],
+            "resume_enabled" => cfg["training.resume_from_previous"],
+            "loss_weight" => Float64(cfg["training.loss_weight"]),
+            "loss_mean_weight" => Float64(cfg["training.loss_mean_weight"]),
+            "loss_cov_weight" => Float64(cfg["training.loss_cov_weight"]),
+        ),
+    )
+end
+
 function copy_configs!(cfg::Dict{String,Any}, params_path::String, run_dir::String)
     cfg_dir = joinpath(run_dir, "config")
     mkpath(cfg_dir)
 
     cp(params_path, joinpath(cfg_dir, "parameters_calibration.toml"); force=true)
     cp(cfg["paths.data_params"], joinpath(cfg_dir, "parameters_data.toml"); force=true)
-    cp(cfg["paths.train_params"], joinpath(cfg_dir, "parameters_train.toml"); force=true)
+    cp(cfg["paths.train_params"], joinpath(cfg_dir, "parameters_train_source.toml"); force=true)
+    open(joinpath(cfg_dir, "parameters_train.toml"), "w") do io
+        TOML.print(io, effective_train_doc(cfg))
+    end
     cp(cfg["paths.responses_params"], joinpath(cfg_dir, "parameters_responses.toml"); force=true)
 
     return cfg_dir
@@ -182,6 +219,100 @@ end
 function append_run_log(run_dir::String, msg::AbstractString)
     ArnoldCommon.append_log(joinpath(run_dir, "calibration_log.txt"), String(msg))
     return nothing
+end
+
+function retry_unstable_parameter_update(method::String,
+    theta_before::Vector{Float64},
+    theta_proposed::Vector{Float64},
+    delta_proposed::Vector{Float64},
+    diag_proposed::Dict{String,Any},
+    cfg::Dict{String,Any},
+    iteration::Int,
+    run_dir::String)
+    retry_enabled = Bool(get(cfg, "calibration.retry_divergent_update", false))
+    diag_proposed["instability_retry_enabled"] = retry_enabled
+    diag_proposed["instability_retry_used"] = false
+    diag_proposed["instability_retry_count"] = 0
+    diag_proposed["instability_retry_recovered"] = false
+    diag_proposed["instability_retry_scales"] = Float64[]
+
+    retry_enabled || return theta_proposed, delta_proposed, diag_proposed, false
+
+    correction_raw = get(diag_proposed, "correction_full_raw", nothing)
+    if !(correction_raw isa AbstractVector) || length(correction_raw) != length(theta_before)
+        append_run_log(
+            run_dir,
+            "Iteration $iteration [$method] instability retry unavailable: missing raw Newton correction",
+        )
+        return theta_proposed, delta_proposed, diag_proposed, false
+    end
+
+    base_scale = Float64(get(diag_proposed, "line_search_scale", NaN))
+    if !isfinite(base_scale) || base_scale <= 0.0
+        base_scale = Float64(get(diag_proposed, "damping_effective", NaN))
+    end
+    if !isfinite(base_scale) || base_scale <= 0.0
+        append_run_log(
+            run_dir,
+            "Iteration $iteration [$method] instability retry unavailable: invalid base step scale",
+        )
+        return theta_proposed, delta_proposed, diag_proposed, false
+    end
+
+    correction_vec = Float64.(correction_raw)
+    retry_scales = Float64[]
+    for attempt in 1:3
+        scale_try = base_scale / (2.0 ^ attempt)
+        delta_try = scale_try .* correction_vec
+        theta_try = theta_before .- delta_try
+        stable_try = CalibrationCommon.theta_candidate_is_stable(theta_try, cfg)
+        push!(retry_scales, scale_try)
+
+        CalibrationCommon.record_update_attempt!(
+            cfg;
+            phase="instability_retry",
+            theta_before=theta_before,
+            theta_trial=theta_try,
+            correction_raw=correction_vec,
+            applied_step=delta_try,
+            scale=scale_try,
+            residual_before=Float64(get(cfg, "runtime.previous_observable_residual", NaN)),
+            residual_after=NaN,
+            improved=false,
+            accepted=stable_try,
+            reason=stable_try ? "stability_recovered_by_step_halving" : "stability_retry_failed",
+            trial_index=attempt,
+            details=Dict(
+                "base_scale" => base_scale,
+            ),
+        )
+
+        append_run_log(
+            run_dir,
+            "Iteration $iteration [$method] instability retry $attempt/3 scale=$scale_try stable=$stable_try theta=$(theta_try)",
+        )
+
+        if stable_try
+            diag_proposed["instability_retry_used"] = true
+            diag_proposed["instability_retry_count"] = attempt
+            diag_proposed["instability_retry_recovered"] = true
+            diag_proposed["instability_retry_scales"] = copy(retry_scales)
+            diag_proposed["line_search_scale"] = scale_try
+            diag_proposed["damping_effective"] = scale_try
+            diag_proposed["applied_step"] = copy(delta_try)
+            diag_proposed["stability_checked"] = true
+            diag_proposed["stability_accepted"] = true
+            diag_proposed["line_search_accepted"] = true
+            diag_proposed["update_policy"] = String(get(diag_proposed, "update_policy", "forced_single_step")) * "+instability_retry_halving"
+            return theta_try, delta_try, diag_proposed, true
+        end
+    end
+
+    diag_proposed["instability_retry_used"] = true
+    diag_proposed["instability_retry_count"] = 3
+    diag_proposed["instability_retry_recovered"] = false
+    diag_proposed["instability_retry_scales"] = copy(retry_scales)
+    return theta_proposed, delta_proposed, diag_proposed, false
 end
 
 function reclaim_runtime_memory!()
@@ -227,9 +358,13 @@ function write_iter0_observables_csv(path::AbstractString, vals::Vector{Float64}
     return path
 end
 
-function observable_gap_norm(A_target::Vector{Float64}, G::Vector{Float64})
+function observable_gap_norm(cfg::Dict{String,Any},
+    A_target::Vector{Float64},
+    G::Vector{Float64};
+    active_idx::Union{Nothing,Vector{Int}}=nothing)
     length(G) == length(A_target) || error("Observable length mismatch: G has $(length(G)) entries, target has $(length(A_target))")
-    return norm(G .- A_target)
+    idx = active_idx === nothing ? cfg["calibration.active_observables"] : active_idx
+    return weighted_observable_residual(cfg, G, A_target; active_idx=idx)
 end
 
 function push_method_metric!(iterations_by_method::Dict{String,Vector{Int}},
@@ -257,8 +392,8 @@ function save_observable_gap_figure(path::AbstractString,
     p = plot(
         ;
         xlabel="iteration",
-        ylabel="||A - G(theta)||_2",
-        title="Observable mismatch norm",
+        ylabel="weighted active observable mismatch",
+        title="Weighted mismatch on tuned observables",
         linewidth=2.0,
         legend=:topright,
         size=(1450, 920),
@@ -359,7 +494,7 @@ function write_observable_gap_csv(path::AbstractString,
     residuals_by_method::Dict{String,Vector{Float64}})
     mkpath(dirname(path))
     open(path, "w") do io
-        println(io, "method,iteration,observable_gap_norm")
+        println(io, "method,iteration,weighted_active_observable_gap")
         for method in CalibrationCommon.method_order()
             haskey(iterations_by_method, method) || continue
             haskey(residuals_by_method, method) || continue
@@ -389,13 +524,14 @@ function build_method_metric_row(iteration::Int,
     is_primary::Bool=false)
     newton = get(method_diag, "newton", Dict{String,Any}())
     active_idx = Int.(collect(get(method_diag, "active_observables_used", Int[])))
-    full_gap = observable_gap_norm(A_target, observables_method)
+    full_gap = norm(observables_method .- A_target)
     active_gap = isempty(active_idx) ? full_gap : norm(observables_method[active_idx] .- A_target[active_idx])
 
     row = Dict{String,Any}(
         "iteration" => iteration,
         "method" => method,
         "is_primary" => is_primary,
+        "observable_gap_norm_active_weighted" => Float64(get(method_diag, "observable_residual", NaN)),
         "observable_gap_norm_full" => full_gap,
         "observable_gap_norm_active" => active_gap,
         "relative_step" => Float64(get(method_diag, "relative_step", NaN)),
@@ -408,6 +544,7 @@ function build_method_metric_row(iteration::Int,
         "observable_residual_previous_unweighted" => Float64(get(method_diag, "observable_residual_previous_unweighted", NaN)),
         "postcheck_rejected" => Bool(get(method_diag, "postcheck_rejected", false)),
         "jacobian_cond_active_free" => Float64(get(method_diag, "jacobian_cond_active_free", NaN)),
+        "jacobian_cond_active_free_scaled" => Float64(get(method_diag, "jacobian_cond_active_free_scaled", NaN)),
         "line_search_used" => Bool(get(newton, "line_search_used", false)),
         "line_search_accepted" => Bool(get(newton, "line_search_accepted", false)),
         "line_search_scale" => Float64(get(newton, "line_search_scale", NaN)),
@@ -430,6 +567,12 @@ function build_method_metric_row(iteration::Int,
         "train_data_path" => String(get(method_diag, "train_data_path", "")),
         "gfdt_data_path" => String(get(method_diag, "gfdt_data_path", "")),
         "checkpoint_path" => String(get(method_diag, "checkpoint_path", "")),
+        "update_policy" => String(get(newton, "update_policy", "")),
+        "require_improving_update" => Bool(get(newton, "require_improving_update", false)),
+        "trial_count" => length(get(newton, "trial_records", Dict{String,Any}[])),
+        "instability_retry_used" => Bool(get(newton, "instability_retry_used", false)),
+        "instability_retry_count" => Int(get(newton, "instability_retry_count", 0)),
+        "instability_retry_recovered" => Bool(get(newton, "instability_retry_recovered", false)),
     )
 
     for (idx, pname) in enumerate(CalibrationCommon.PARAM_NAMES)
@@ -485,11 +628,15 @@ function save_calibration_history_artifacts(run_dir::String,
 
     metrics_csv = write_method_metrics_csv(joinpath(history_dir, "method_iteration_metrics.csv"), method_metric_rows)
     gap_csv = write_observable_gap_csv(joinpath(history_dir, "observable_gap_norm.csv"), observable_gap_iters_by_method, observable_gap_vals_by_method)
+    model_eval_csv = write_method_metrics_csv(joinpath(history_dir, "model_evaluations.csv"), get(cfg, "runtime.model_evaluation_records", Dict{String,Any}[]))
+    update_attempt_csv = write_method_metrics_csv(joinpath(history_dir, "update_attempts.csv"), get(cfg, "runtime.update_attempt_records", Dict{String,Any}[]))
 
     return Dict(
         "history_hdf5" => history_h5,
         "method_metrics_csv" => metrics_csv,
         "observable_gap_csv" => gap_csv,
+        "model_evaluations_csv" => model_eval_csv,
+        "update_attempts_csv" => update_attempt_csv,
     )
 end
 
@@ -552,6 +699,8 @@ function save_final_summary(state::CalibrationState, cfg::Dict{String,Any}, run_
             "history_hdf5" => artifact_path(joinpath(run_dir, "history", "calibration_history.hdf5")),
             "method_metrics_csv" => artifact_path(joinpath(run_dir, "history", "method_iteration_metrics.csv")),
             "observable_gap_csv" => artifact_path(joinpath(run_dir, "history", "observable_gap_norm.csv")),
+            "model_evaluations_csv" => artifact_path(joinpath(run_dir, "history", "model_evaluations.csv")),
+            "update_attempts_csv" => artifact_path(joinpath(run_dir, "history", "update_attempts.csv")),
         ),
     )
 
@@ -676,6 +825,10 @@ function execute_iteration_method(method::String,
     method_cfg["runtime.iteration"] = iteration
     method_cfg["calibration.free_parameters"] = copy(iter_selection.free_parameters)
     method_cfg["calibration.active_observables"] = copy(iter_selection.active_observables)
+    method_cfg["calibration.damping_active"] = get(method_cfg, "calibration.damping.$method", method_cfg["calibration.damping"])
+    damping_active = method_cfg["calibration.damping_active"]
+
+    append_run_log(run_dir, "Iteration $iteration [$method] damping=$damping_active")
 
     jac_method = compute_iteration_jacobians(method_cfg, theta_tuple_method, gfdt_path, checkpoint_path, iteration, asset.method_root)
     haskey(jac_method, method) || error("Missing Jacobian output for method '$method'")
@@ -695,11 +848,45 @@ function execute_iteration_method(method::String,
 
     theta_proposed_raw, delta_proposed_raw, diag_proposed = perform_newton_update(jr.S, jr.G, A_target, method_theta, method_cfg)
 
+    proposed_theta_changed = !isapprox(norm(theta_proposed_raw .- method_theta), 0.0; atol=1e-12, rtol=1e-12)
+    predicted_theta_stable = true
+    if proposed_theta_changed
+        predicted_theta_stable = CalibrationCommon.theta_candidate_is_stable(theta_proposed_raw, method_cfg)
+    end
+    if !predicted_theta_stable
+        retry_enabled = Bool(get(method_cfg, "calibration.retry_divergent_update", false))
+        if retry_enabled
+            append_run_log(run_dir, "Iteration $iteration [$method] proposed theta failed stability check; attempting step-halving recovery")
+            theta_proposed_raw, delta_proposed_raw, diag_proposed, predicted_theta_stable = retry_unstable_parameter_update(
+                method,
+                method_theta,
+                theta_proposed_raw,
+                delta_proposed_raw,
+                diag_proposed,
+                method_cfg,
+                iteration,
+                run_dir,
+            )
+        end
+        if !predicted_theta_stable
+            append_run_log(
+                run_dir,
+                retry_enabled ?
+                    "Iteration $iteration [$method] deactivated: predicted theta failed end-of-iteration stability check after 3 step halvings theta=$(theta_proposed_raw)" :
+                    "Iteration $iteration [$method] deactivated: predicted theta failed end-of-iteration stability check theta=$(theta_proposed_raw)",
+            )
+            error("Predicted theta is unstable after update")
+        end
+    end
+
     obs_at_proposed = try
-        estimate_observables_for_convergence(theta_proposed_raw, method_cfg)
+        estimate_observables_for_convergence(theta_proposed_raw, method_cfg; phase="postupdate_recompute")
     catch err
-        @warn "Could not estimate observables at proposed theta for method; using current" method err=sprint(showerror, err)
-        copy(jr.G)
+        append_run_log(
+            run_dir,
+            "Iteration $iteration [$method] deactivated: post-update observable recomputation failed at theta=$(theta_proposed_raw) error=$(sprint(showerror, err))",
+        )
+        rethrow(err)
     end
 
     cond_sub = try
@@ -707,6 +894,7 @@ function execute_iteration_method(method::String,
     catch
         NaN
     end
+    cond_sub_scaled = Float64(get(diag_proposed, "active_subproblem_cond_scaled", NaN))
 
     obs_residual_proposed = weighted_observable_residual(
         method_cfg,
@@ -727,19 +915,7 @@ function execute_iteration_method(method::String,
     postcheck_rel_tol = Float64(method_cfg["calibration.postcheck_rel_tol"])
     postcheck_abs_tol = Float64(method_cfg["calibration.postcheck_abs_tol"])
     rollback_threshold = prev_obs_residual * (1.0 + postcheck_rel_tol) + postcheck_abs_tol
-    postcheck_rejected = obs_residual_proposed > rollback_threshold
-    if postcheck_rejected
-        theta_committed .= method_theta
-        delta_committed .= 0.0
-        obs_committed .= prev_obs_method
-        obs_residual_method = prev_obs_residual
-        obs_residual_method_unweighted = prev_obs_residual_unweighted
-        rel_step = 0.0
-        append_run_log(
-            run_dir,
-            "Iteration $iteration [$method] rollback after post-check: proposed_residual=$(obs_residual_proposed) previous_residual=$(prev_obs_residual) threshold=$(rollback_threshold)",
-        )
-    end
+    postcheck_rejected = false
 
     method_diag = Dict{String,Any}(
         "theta_before" => copy(method_theta),
@@ -757,11 +933,13 @@ function execute_iteration_method(method::String,
         "observable_residual_proposed_unweighted" => obs_residual_proposed_unweighted,
         "observable_residual_previous" => prev_obs_residual,
         "observable_residual_previous_unweighted" => prev_obs_residual_unweighted,
+        "predicted_theta_stable" => predicted_theta_stable,
         "postcheck_rejected" => postcheck_rejected,
         "postcheck_rel_tol" => postcheck_rel_tol,
         "postcheck_abs_tol" => postcheck_abs_tol,
         "postcheck_threshold" => rollback_threshold,
         "jacobian_cond_active_free" => cond_sub,
+        "jacobian_cond_active_free_scaled" => cond_sub_scaled,
         "newton" => diag_proposed,
         "checkpoint_path" => checkpoint_path === nothing ? "" : checkpoint_path,
         "train_data_path" => train_path,
@@ -832,11 +1010,17 @@ function main(args=ARGS)
     # Seed observable histories at iteration 0 (before any parameter update).
     # This baseline is shared across methods because all start from the same θ₀.
     try
-        obs0 = estimate_observables_for_convergence(theta0, cfg)
+        obs0 = estimate_observables_for_convergence(theta0, cfg; phase="iteration0_baseline")
         cfg["runtime.obs0"] = copy(obs0)
         for method in methods_enabled
             push!(state.obs_history[method], copy(obs0))
-            push_method_metric!(observable_gap_iters_by_method, observable_gap_vals_by_method, method, 0, observable_gap_norm(A_target, obs0))
+            push_method_metric!(
+                observable_gap_iters_by_method,
+                observable_gap_vals_by_method,
+                method,
+                0,
+                observable_gap_norm(cfg, A_target, obs0; active_idx=cfg["calibration.active_observables"]),
+            )
         end
         write_iter0_observables_csv(
             joinpath(run_dir, "truth", "observables_iter0.csv"),
@@ -996,14 +1180,19 @@ function main(args=ARGS)
         cfg["runtime.current_observable_series"] = copy(jacobians[effective_primary].A)
         cfg["runtime.current_gfdt_path"] = String(get(primary_diag, "gfdt_data_path", ""))
         obs_residual = Float64(get(primary_diag, "observable_residual", Inf))
-        obs_gap_full = observable_gap_norm(A_target, observables[effective_primary])
+        obs_gap_full = norm(observables[effective_primary] .- A_target)
         for method in sort(collect(keys(method_diags)))
             push_method_metric!(
                 observable_gap_iters_by_method,
                 observable_gap_vals_by_method,
                 method,
                 it,
-                observable_gap_norm(A_target, observables[method]),
+                observable_gap_norm(
+                    cfg,
+                    A_target,
+                    observables[method];
+                    active_idx=Vector{Int}(get(method_diags[method], "active_observables_used", cfg["calibration.active_observables"])),
+                ),
             )
             push!(
                 method_metric_rows,

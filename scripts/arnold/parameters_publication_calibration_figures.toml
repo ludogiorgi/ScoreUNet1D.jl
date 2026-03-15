@@ -7,16 +7,14 @@ convergence_basename = "calibration_convergence_publication"
 gap_basename = "observable_gap_norm_publication"
 
 [style]
-dpi = 300
-fontfamily = "Computer Modern"
-convergence_width = 3200
-convergence_height = 2250
-gap_width = 1950
-gap_height = 1080
-line_width = 2.8
-reference_line_width = 1.8
-marker_size = 7.2
-title_font_size = 18
-guide_font_size = 17
-tick_font_size = 15
-legend_font_size = 16
+fontfamily = "Helvetica"
+basefontsize = 38
+ticksize = 30
+linewidth = 4.2
+target_linewidth = 1.8
+convergence_panel_width = 560
+convergence_panel_height = 400
+gap_width = 2400
+gap_height = 1400
+px_per_unit = 2.0
+gap_max_iteration = 9

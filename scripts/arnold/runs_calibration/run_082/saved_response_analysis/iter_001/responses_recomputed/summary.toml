@@ -1,0 +1,31 @@
+iteration_name = "iter_001"
+active_observable_labels = ["<X_k>", "Var(X_k)", "Skew(X_k)", "ExcessKurt(X_k)", "Cov(X_k,X_{k+1})"]
+response_kind = "heaviside"
+theta_source_path = "/home/ludogio/Documents/JuliaProjects/ScoreUNet1D.jl/scripts/arnold/runs_calibration/run_082/iter_001/shared/theta_2ea2bdae05b865d4/iter_001/data/gfdt_stochastic.hdf5"
+theta = [0.14937746851445197, 0.39447150979547196, -0.008426766431124878, -0.0016716747838000485, 1.0359301191171504]
+run_dir = "/home/ludogio/Documents/JuliaProjects/ScoreUNet1D.jl/scripts/arnold/runs_calibration/run_082"
+iteration = 1
+response_methods = ["numerical_integration", "gaussian", "unet", "finite_difference"]
+checkpoint_path = ""
+gfdt_path = "/home/ludogio/Documents/JuliaProjects/ScoreUNet1D.jl/scripts/arnold/runs_calibration/run_082/saved_response_analysis/iter_001/responses_recomputed/generated_gfdt_stochastic.hdf5"
+active_observables = [1, 2, 3, 4, 5]
+method_iter_dir = "/home/ludogio/Documents/JuliaProjects/ScoreUNet1D.jl/scripts/arnold/runs_calibration/run_082/method_unet/iter_001"
+
+[derived]
+dt_obs = 0.01
+n_lags = 500
+response_total_fine_steps = 1000
+fd_total_samples = 7200000
+numerical_init_ensembles = 36
+
+[methods_enabled]
+unet = false
+finite_difference = false
+gaussian = true
+numerical_integration = true
+
+[outputs]
+figure = "/home/ludogio/Documents/JuliaProjects/ScoreUNet1D.jl/scripts/arnold/runs_calibration/run_082/saved_response_analysis/iter_001/responses_recomputed/responses_heaviside_5x5.png"
+generated_gfdt_hdf5 = "/home/ludogio/Documents/JuliaProjects/ScoreUNet1D.jl/scripts/arnold/runs_calibration/run_082/saved_response_analysis/iter_001/responses_recomputed/generated_gfdt_stochastic.hdf5"
+parameters_used = "/home/ludogio/Documents/JuliaProjects/ScoreUNet1D.jl/scripts/arnold/runs_calibration/run_082/saved_response_analysis/iter_001/responses_recomputed/parameters_used.toml"
+responses_hdf5 = "/home/ludogio/Documents/JuliaProjects/ScoreUNet1D.jl/scripts/arnold/runs_calibration/run_082/saved_response_analysis/iter_001/responses_recomputed/responses.hdf5"

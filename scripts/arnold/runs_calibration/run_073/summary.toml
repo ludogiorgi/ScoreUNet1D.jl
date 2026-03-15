@@ -1,0 +1,51 @@
+iterations = 25
+converged = false
+convergence_metric = 0.07011373388315584
+free_parameters = [1, 2, 3, 4, 5]
+run_dir = "/home/ludogio/Documents/JuliaProjects/ScoreUNet1D.jl/scripts/arnold/runs_calibration/run_073"
+obs_residual_primary = 0.10484151368491507
+active_observables = [1, 2, 3, 4, 5, 6, 7]
+
+[devices]
+responses_score = "GPU:0"
+training = "GPU:0"
+figures_langevin = "GPU:0"
+
+[methods]
+primary = "unet"
+unet = true
+convergence_scope = "primary"
+finite_difference = true
+gaussian = true
+
+[final_theta]
+sigma = 1.214333724269591
+alpha2 = -0.01877644016007175
+alpha1 = 0.3985103837679474
+alpha3 = 0.0009601853826755134
+alpha0 = 0.1611191944219704
+
+[target_observables]
+cov_x_lag1 = 0.9351169885739748
+var_x = 12.779405235264303
+cov_x_lag4 = 1.0723750455018304
+cov_x_lag2 = -5.659306028549505
+mean_x = 2.5171506975080766
+kurt_x = -0.6067437824150461
+skew_x = 0.06586729244016247
+
+[run]
+run_id = 73
+run_name = "run_073"
+run_seed_offset = 72000000000
+
+[artifacts]
+history_hdf5 = "/home/ludogio/Documents/JuliaProjects/ScoreUNet1D.jl/scripts/arnold/runs_calibration/run_073/history/calibration_history.hdf5"
+target_observables_csv = "/home/ludogio/Documents/JuliaProjects/ScoreUNet1D.jl/scripts/arnold/runs_calibration/run_073/truth/target_observables.csv"
+observable_gap_csv = "/home/ludogio/Documents/JuliaProjects/ScoreUNet1D.jl/scripts/arnold/runs_calibration/run_073/history/observable_gap_norm.csv"
+observable_gap_figure = "/home/ludogio/Documents/JuliaProjects/ScoreUNet1D.jl/scripts/arnold/runs_calibration/run_073/observable_gap_norm.png"
+method_metrics_csv = "/home/ludogio/Documents/JuliaProjects/ScoreUNet1D.jl/scripts/arnold/runs_calibration/run_073/history/method_iteration_metrics.csv"
+model_evaluations_csv = "/home/ludogio/Documents/JuliaProjects/ScoreUNet1D.jl/scripts/arnold/runs_calibration/run_073/history/model_evaluations.csv"
+convergence_figure = "/home/ludogio/Documents/JuliaProjects/ScoreUNet1D.jl/scripts/arnold/runs_calibration/run_073/convergence.png"
+update_attempts_csv = "/home/ludogio/Documents/JuliaProjects/ScoreUNet1D.jl/scripts/arnold/runs_calibration/run_073/history/update_attempts.csv"
+truth_trajectory_hdf5 = "/home/ludogio/Documents/JuliaProjects/ScoreUNet1D.jl/scripts/arnold/runs_calibration/run_073/truth/truth_trajectory.hdf5"
