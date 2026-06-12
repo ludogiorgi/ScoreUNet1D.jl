@@ -68,6 +68,9 @@ end
 function build_model_config(params::Dict{String,Any})
     activation = activation_from_string(get(params, "activation", "swish"))
     final_act = activation_from_string(get(params, "final_activation", "identity"))
+    normalization = Symbol(lowercase(String(get(params, "normalization", "batchnorm"))))
+    normalization in (:batchnorm, :none, :groupnorm) ||
+        throw(ArgumentError("Unsupported model.normalization=$(normalization); allowed values are batchnorm, none, groupnorm."))
     cfg = ScoreUNetConfig(
         in_channels=Int(get(params, "in_channels", 1)),
         base_channels=Int(get(params, "base_channels", 32)),
@@ -78,7 +81,7 @@ function build_model_config(params::Dict{String,Any})
         final_activation=final_act,
     )
     init_seed = Int(get(params, "init_seed", 314159))
-    return cfg, init_seed
+    return cfg, init_seed, normalization
 end
 
 function build_trainer_config(params::Dict{String,Any})
@@ -102,9 +105,9 @@ function build_trainer_config(params::Dict{String,Any})
     return cfg
 end
 
-function instantiate_model(cfg::ScoreUNetConfig, seed::Int)
+function instantiate_model(cfg::ScoreUNetConfig, seed::Int; normalization::Symbol=:batchnorm)
     Random.seed!(seed)
-    model = build_unet(cfg)
+    model = build_unet(cfg; normalization=normalization)
     Random.seed!()
     return model
 end
@@ -194,7 +197,7 @@ function train_score_network(config_path::AbstractString;
     train_data = dataset
 
     # Build model config
-    model_config, model_seed = build_model_config(model_cfg)
+    model_config, model_seed, model_normalization = build_model_config(model_cfg)
     L = sample_length(dataset)
     model_config = adjust_config_for_data(model_config, L)
 
@@ -213,7 +216,7 @@ function train_score_network(config_path::AbstractString;
         haskey(contents, :cfg) && (model_config = contents[:cfg])
     else
         @info "Creating new model" seed = model_seed
-        current_model = instantiate_model(model_config, model_seed)
+        current_model = instantiate_model(model_config, model_seed; normalization=model_normalization)
     end
 
     current_model = move_model(current_model, device)

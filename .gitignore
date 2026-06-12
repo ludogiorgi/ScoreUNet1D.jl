@@ -3,6 +3,7 @@
 
 # Allow a small, source-only set of files
 !.gitignore
+!LICENSE
 !README.md
 !Project.toml
 !Manifest.toml

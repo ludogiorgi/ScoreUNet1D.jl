@@ -56,11 +56,13 @@ function periodic_pad(x, left::Integer, right::Integer)
     right = max(right, 0)
     parts = Tuple{}
     if left > 0
-        parts = (view(x, L - left + 1:L, :, :),)
+        left_idx = left <= L ? (L - left + 1:L) : Int.(mod.(((L - left + 1):L) .- 1, L) .+ 1)
+        parts = (view(x, left_idx, :, :),)
     end
     parts = (parts..., x)
     if right > 0
-        parts = (parts..., view(x, 1:right, :, :))
+        right_idx = right <= L ? (1:right) : Int.(mod.((1:right) .- 1, L) .+ 1)
+        parts = (parts..., view(x, right_idx, :, :))
     end
     return cat(parts...; dims=1)
 end

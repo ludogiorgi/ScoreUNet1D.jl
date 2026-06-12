@@ -157,7 +157,7 @@ function train_single_device!(model, dataset::NormalizedDataset, cfg::ScoreTrain
                 batch = batch_view_gpu
 
                 noise_view_gpu = view(noise_gpu_buffer, :, :, 1:current_batch_size)
-                CUDA.randn!(noise_view_gpu)
+                fill_gpu_noise!(noise_view_gpu)
                 noise = noise_view_gpu
             else
                 # CPU Path: Use pre-allocated buffers and threaded noise
@@ -263,10 +263,15 @@ function fill_noise!(buffer, rngs::Vector{<:AbstractRNG})
     return buffer
 end
 
+function fill_gpu_noise!(buffer)
+    Random.randn!(CUDA.default_rng(), buffer)
+    return buffer
+end
+
 function noise_like(batch, device::ExecutionDevice, rngs::Vector{<:AbstractRNG})
     noise = similar(batch)
     if device isa GPUDevice
-        CUDA.randn!(noise)
+        fill_gpu_noise!(noise)
     else
         fill_noise!(noise, rngs)
     end

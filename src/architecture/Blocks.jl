@@ -45,12 +45,27 @@ Functors.@functor ConvBlock
 
 function ConvBlock(in_ch::Integer, out_ch::Integer;
                    kernel::Integer=3, periodic::Bool=false,
-                   activation::Function=Flux.gelu)
+                   activation::Function=Flux.gelu,
+                   normalization::Symbol=:batchnorm)
     conv1 = make_conv1d(in_ch, out_ch; kernel=kernel, periodic=periodic)
-    bn1 = Flux.BatchNorm(out_ch)
     conv2 = make_conv1d(out_ch, out_ch; kernel=kernel, periodic=periodic)
-    bn2 = Flux.BatchNorm(out_ch)
-    return ConvBlock(Chain(conv1, bn1, activation, conv2, bn2, activation))
+    if normalization == :batchnorm
+        norm1 = Flux.BatchNorm(out_ch)
+        norm2 = Flux.BatchNorm(out_ch)
+        return ConvBlock(Chain(conv1, norm1, activation, conv2, norm2, activation))
+    elseif normalization == :groupnorm
+        groups = min(8, out_ch)
+        while out_ch % groups != 0
+            groups -= 1
+        end
+        norm1 = Flux.GroupNorm(out_ch, groups)
+        norm2 = Flux.GroupNorm(out_ch, groups)
+        return ConvBlock(Chain(conv1, norm1, activation, conv2, norm2, activation))
+    elseif normalization == :none
+        return ConvBlock(Chain(conv1, activation, conv2, activation))
+    else
+        throw(ArgumentError("Unsupported ConvBlock normalization: $(normalization)."))
+    end
 end
 
 (block::ConvBlock)(x) = block.layers(x)
@@ -69,8 +84,10 @@ Functors.@functor DownBlock
 
 function DownBlock(in_ch::Integer, out_ch::Integer;
                    kernel::Integer=3, periodic::Bool=false,
-                   activation::Function=Flux.gelu)
-    conv = ConvBlock(in_ch, out_ch; kernel=kernel, periodic=periodic, activation=activation)
+                   activation::Function=Flux.gelu,
+                   normalization::Symbol=:batchnorm)
+    conv = ConvBlock(in_ch, out_ch; kernel=kernel, periodic=periodic,
+        activation=activation, normalization=normalization)
     down = make_conv1d(out_ch, out_ch; kernel=2, stride=2, periodic=periodic, activation=identity, pad=0)
     return DownBlock(conv, down)
 end
@@ -103,10 +120,12 @@ Functors.@functor UpBlock
 
 function UpBlock(in_ch::Integer, skip_ch::Integer, out_ch::Integer;
                  kernel::Integer=3, periodic::Bool=false,
-                 activation::Function=Flux.gelu)
+                 activation::Function=Flux.gelu,
+                 normalization::Symbol=:batchnorm)
     up = Upsample1D(2)
     block = ConvBlock(in_ch + skip_ch, out_ch;
-                      kernel=kernel, periodic=periodic, activation=activation)
+                      kernel=kernel, periodic=periodic, activation=activation,
+                      normalization=normalization)
     return UpBlock(up, block)
 end
 
@@ -156,4 +175,14 @@ function zero_pad(x, left::Integer, right::Integer)
         out[left+w+1:end, :, :] .= 0
     end
     return out
+end
+
+Flux.Zygote.@adjoint function zero_pad(x, left::Integer, right::Integer)
+    y = zero_pad(x, left, right)
+    function zero_pad_pullback(ȳ)
+        w = size(x, 1)
+        gx = left == 0 && right == 0 ? ȳ : ȳ[(left + 1):(left + w), :, :]
+        return (gx, nothing, nothing)
+    end
+    return y, zero_pad_pullback
 end

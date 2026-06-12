@@ -30,7 +30,7 @@ Functors.@functor ScoreUNet
 
 Constructs a `ScoreUNet` based on the provided configuration.
 """
-function build_unet(cfg::ScoreUNetConfig)
+function build_unet(cfg::ScoreUNetConfig; normalization::Symbol=:batchnorm)
     channels = cfg.base_channels .* cfg.channel_multipliers
     isempty(channels) && throw(ArgumentError("channel_multipliers must not be empty"))
 
@@ -40,7 +40,8 @@ function build_unet(cfg::ScoreUNetConfig)
         down_blocks[i] = DownBlock(in_ch, ch;
                                    kernel=cfg.kernel_size,
                                    periodic=cfg.periodic,
-                                   activation=cfg.activation)
+                                   activation=cfg.activation,
+                                   normalization=normalization)
         in_ch = ch
     end
 
@@ -48,7 +49,8 @@ function build_unet(cfg::ScoreUNetConfig)
     bottleneck = ConvBlock(in_ch, bottleneck_channels;
                            kernel=cfg.kernel_size,
                            periodic=cfg.periodic,
-                           activation=cfg.activation)
+                           activation=cfg.activation,
+                           normalization=normalization)
 
     up_blocks = Vector{UpBlock}(undef, length(channels))
     current = bottleneck_channels
@@ -56,7 +58,8 @@ function build_unet(cfg::ScoreUNetConfig)
         up_blocks[i] = UpBlock(current, ch, ch;
                                kernel=cfg.kernel_size,
                                periodic=cfg.periodic,
-                               activation=cfg.activation)
+                               activation=cfg.activation,
+                               normalization=normalization)
         current = ch
     end
 

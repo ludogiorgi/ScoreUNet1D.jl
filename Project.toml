@@ -1,7 +1,7 @@
 name = "ScoreUNet1D"
 uuid = "04dce14b-8563-4eb7-ad48-83344b0d4c66"
 authors = ["Ludovico Giorgi"]
-version = "0.1.0"
+version = "0.1.1"
 
 [deps]
 BSON = "fbb218c0-5317-5bc6-957e-2ee96dd4b1f0"

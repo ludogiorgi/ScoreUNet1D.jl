@@ -85,6 +85,10 @@ All scripts use TOML configuration files in the same directory:
 julia --project=. -e 'using Pkg; Pkg.test()'
 ```
 
+## License
+
+`ScoreUNet1D.jl` is released under the BSD 3-Clause License. See `LICENSE`.
+
 ## Citation
 
 If using this code, please cite the corresponding work on score-based reduced-order models.
