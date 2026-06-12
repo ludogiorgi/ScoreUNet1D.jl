@@ -192,7 +192,7 @@ function run_langevin(model, dataset::NormalizedDataset, cfg::LangevinConfig,
     dim = L * C
     n_ens = max(cfg.n_ensembles, 1)
 
-    # Use identity matrices for Phi and Sigma as specified in AGENTS.md
+    # Use identity matrices for the default constant-mobility Langevin mode.
     # Keep everything in Float32 to match the score model and avoid
     # unnecessary conversions inside the integrator.
     Phi = Matrix{Float32}(I, dim, dim)
