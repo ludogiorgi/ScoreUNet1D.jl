@@ -54,7 +54,7 @@ StateSpacePartitions = "0.1.0"
 StatsBase = "0.34"
 Zygote = "0.6"
 cuDNN = "1.4.6"
-julia = "1.10"
+julia = "1.10, 1.11"
 
 [extras]
 Test = "8dfed614-e22c-5e08-85e1-65c5234f0b40"
