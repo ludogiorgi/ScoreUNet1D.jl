@@ -1,0 +1,20 @@
+name: Public source checks
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  source-checks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: julia-actions/setup-julia@v3
+        with:
+          version: "1.10"
+      - name: Validate tracked sources and public boundary
+        run: julia --color=yes test/source_checks.jl

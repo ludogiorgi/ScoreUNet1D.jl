@@ -1,0 +1,30 @@
+# Ignore everything by default
+*
+
+# Allow a small, source-only set of files
+!.gitignore
+!README.md
+!LICENSE
+!CITATION.cff
+!Project.toml
+!Manifest.toml
+!.github/
+!.github/**/
+!.github/**/*.yml
+!.github/**/*.yaml
+
+# Allow directories so we can selectively unignore file types within them
+!src/
+!src/**/
+!scripts/
+!scripts/**/
+!test/
+!test/**/
+
+# Allow only source/config files in those directories
+!src/**/*.jl
+!scripts/**/*.jl
+!scripts/**/*.toml
+!test/**/*.jl
+
+# Everything else (artifacts, data, binaries, figures, logs) remains ignored by default.

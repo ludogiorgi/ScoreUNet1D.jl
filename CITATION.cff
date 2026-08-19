@@ -1,0 +1,22 @@
+cff-version: 1.2.0
+message: If you use this software, please cite the corresponding article.
+title: ScoreUNet1D.jl
+type: software
+authors:
+  - family-names: Giorgini
+    given-names: Ludovico Theo
+version: 0.1.0
+date-released: 2026-08-18
+repository-code: https://github.com/ludogiorgi/ScoreUNet1D.jl
+license: BSD-3-Clause
+preferred-citation:
+  type: article
+  authors:
+    - family-names: Giorgini
+      given-names: Ludovico Theo
+  title: Score-Based Modeling of Effective Langevin Dynamics
+  journal: Physical Review E
+  year: 2026
+  volume: 114
+  start: L012102
+  doi: 10.1103/6qpv-lqmt
