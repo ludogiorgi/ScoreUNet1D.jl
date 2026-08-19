@@ -14,7 +14,7 @@ models, generated figures, and run directories remain external artifacts.
 
 ## Requirements
 
-- Julia ≥ 1.10
+- Julia 1.10 or 1.11 (the publication release was verified with Julia 1.10.5)
 - HDF5 dataset with normalized 1D samples
 - CPU/GPU with sufficient RAM for Langevin integration
 
